@@ -792,7 +792,12 @@ void main() {
 
   function resize(player) {
     const rect = player.stage.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // The Canvas 2D still frame is painted pixel by pixel on slow devices,
+    // so it stays at CSS resolution.
+    const dpr =
+      player.renderer instanceof CanvasRenderer
+        ? 1
+        : Math.min(window.devicePixelRatio || 1, 2);
     player.canvas.width = Math.max(1, Math.round(rect.width * dpr));
     player.canvas.height = Math.max(1, Math.round(rect.height * dpr));
     player.cell = Math.max(2, Math.round(CELL * dpr));
