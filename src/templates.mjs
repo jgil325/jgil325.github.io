@@ -92,7 +92,7 @@ export function shell({
   ${page === "home" ? `<script src="/assets/${scene}" defer></script>` : ""}
 </head>
 <body data-page="${page}">
-  ${navigation()}<main id="main">${content}</main>${footer()}
+  ${navigation()}<main id="main"${page === "home" ? ' class="dot-paper"' : ""}>${content}</main>${footer()}
 </body>
 </html>`;
 }

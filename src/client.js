@@ -71,6 +71,51 @@
   systemDark.addEventListener("change", syncTheme);
   syncTheme();
 
+  // The dot paper's glow follows a fine pointer, at most once per frame, and
+  // fades when the pointer rests or leaves. It stays in page coordinates, so
+  // while scrolling it remains where the pointer last was.
+  const paper = document.querySelector(".dot-paper");
+  if (
+    paper &&
+    window.matchMedia("(hover: hover) and (pointer: fine)").matches
+  ) {
+    let frame = 0;
+    let idle = 0;
+    let pointer;
+    const place = () => {
+      frame = 0;
+      const box = paper.getBoundingClientRect();
+      const half =
+        parseFloat(getComputedStyle(paper).getPropertyValue("--glow-size")) / 2;
+      paper.style.setProperty(
+        "--glow-x",
+        `${Math.round(pointer.clientX - box.left - half)}px`,
+      );
+      paper.style.setProperty(
+        "--glow-y",
+        `${Math.round(pointer.clientY - box.top - half)}px`,
+      );
+      paper.dataset.glow = "";
+    };
+    paper.addEventListener(
+      "pointermove",
+      (event) => {
+        if (event.pointerType !== "mouse") return;
+        pointer = event;
+        if (!frame) frame = requestAnimationFrame(place);
+        clearTimeout(idle);
+        idle = setTimeout(() => delete paper.dataset.glow, 1600);
+      },
+      { passive: true },
+    );
+    paper.addEventListener("pointerleave", () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      clearTimeout(idle);
+      delete paper.dataset.glow;
+    });
+  }
+
   // Progressive enhancement: all content remains visible when JavaScript is absent.
   let observer;
   function revealAll() {

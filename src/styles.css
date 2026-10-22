@@ -271,6 +271,72 @@ body[data-page="home"] .site-header {
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
+  background: var(--color-canvas);
+}
+/* Below the hero the page sits on a quiet dot grid. Around a fine pointer
+   the dots grow and take the accent, in a ring that stays light at the
+   center so text under the pointer remains easy to read. The glow is a small
+   layer moved with a transform; its grid is offset to match the page grid. */
+.dot-paper {
+  --dot-pitch: 14px;
+  --dot-ink: color-mix(in srgb, var(--color-ink) 8%, transparent);
+  --glow-size: 400px;
+  position: relative;
+  isolation: isolate;
+}
+.dot-paper::before,
+.dot-paper::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+}
+.dot-paper::before {
+  inset: 0;
+  background: radial-gradient(circle, var(--dot-ink) 1.1px, transparent 1.6px) 0
+    0 / var(--dot-pitch) var(--dot-pitch);
+}
+@media (hover: hover) and (pointer: fine) {
+  .dot-paper::after {
+    top: 0;
+    left: 0;
+    width: var(--glow-size);
+    height: var(--glow-size);
+    background:
+      radial-gradient(
+          circle,
+          color-mix(in srgb, var(--color-accent) 38%, transparent) 1.8px,
+          transparent 2.3px
+        )
+        calc(var(--glow-x, 0px) * -1) calc(var(--glow-y, 0px) * -1) /
+        var(--dot-pitch) var(--dot-pitch),
+      radial-gradient(
+        closest-side,
+        color-mix(in srgb, var(--color-accent) 4%, transparent),
+        transparent
+      );
+    -webkit-mask-image: radial-gradient(
+      closest-side,
+      rgb(0 0 0 / 0.2),
+      #000 42%,
+      rgb(0 0 0 / 0.35) 70%,
+      transparent
+    );
+    mask-image: radial-gradient(
+      closest-side,
+      rgb(0 0 0 / 0.2),
+      #000 42%,
+      rgb(0 0 0 / 0.35) 70%,
+      transparent
+    );
+    opacity: 0;
+    transform: translate3d(var(--glow-x, 0px), var(--glow-y, 0px), 0);
+    transition: opacity 400ms var(--ease-out);
+  }
+  .dot-paper[data-glow]::after {
+    opacity: 1;
+    transition-duration: 200ms;
+  }
 }
 .scene-stage canvas {
   display: block;
@@ -1652,6 +1718,8 @@ html[data-keyboard]
   .site-footer,
   .skip-link,
   .scene-stage,
+  .dot-paper::before,
+  .dot-paper::after,
   [data-print],
   .resume .back-link {
     display: none !important;

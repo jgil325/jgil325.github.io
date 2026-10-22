@@ -151,6 +151,13 @@ assert.equal(
   2,
   "Hero and contact scenes",
 );
+assert(home.includes('<main id="main" class="dot-paper">'), "Home dot paper");
+assert(
+  /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.dot-paper::after/.test(
+    styles,
+  ),
+  "Pointer glow only for fine pointers",
+);
 console.log(
   `Verified ${htmlFiles.length} pages, all internal destinations and srcset candidates, 3x image coverage, project order, and motion safeguards.`,
 );

@@ -104,25 +104,20 @@ void main() {
     * (1.0 - smoothstep(0.35, 0.5, sat))
     * (1.0 - smoothstep(uSkyline - 0.06, uSkyline, uv.y));
 
-  // Gusts are patches that sweep across the field, with a finer ripple inside.
-  float gust = noise(vec2(uv.x * 4.0 - uTime * 0.35, uv.y * 7.0 + uTime * 0.05));
-  float ripple = 0.5 + 0.5 * sin(uv.x * 30.0 + uv.y * 18.0 - uTime * 1.8);
-  float bend = smoothstep(0.45, 0.85, gust) * (0.55 + 0.45 * ripple) * grass * uWind * uMotion;
-  vec2 billow = vec2(noise(uv * 5.0 + uTime * 0.12), noise(uv * 5.0 + 17.0 - uTime * 0.1)) - 0.5;
-  // Clouds billow and glide slowly back and forth; grass sways with the gusts.
-  vec2 shift = vec2(bend * 0.018 * smoothstep(0.3, 1.0, uv.y), 0.0)
-    + (billow * 0.025 + vec2(0.03 * sin(uTime * 0.07), 0.0)) * sky * uMotion;
+  // Wind: a slow wave sways the grass from side to side, a little stronger
+  // in passing gusts and toward the bottom, where the blades are nearest.
+  float gust = 0.55 + 0.45 * noise(vec2(uv.x * 2.5 - uTime * 0.18, uv.y * 3.0));
+  float sway = sin(uv.x * 22.0 + uv.y * 9.0 - uTime * 1.2) * gust * grass * uWind * uMotion;
+  // Clouds billow gently and drift slowly back and forth.
+  vec2 billow = vec2(noise(uv * 4.0 + uTime * 0.06), noise(uv * 4.0 + 17.0 - uTime * 0.05)) - 0.5;
+  vec2 shift = vec2(sway * 0.008 * smoothstep(0.35, 1.0, uv.y), 0.0)
+    + (billow * 0.018 + vec2(0.02 * sin(uTime * 0.05), 0.0)) * sky * uMotion;
 
-  vec3 c = textureLod(uImage, uv + shift, uLod).rgb + bend * 0.14;
+  vec3 c = textureLod(uImage, uv + shift, uLod).rgb + max(sway, 0.0) * 0.04;
   if (uNight > 0.5) c = pow(clamp(c * vec3(0.55, 0.66, 0.98), 0.0, 1.0), vec3(1.15));
   float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
   vec3 col = clamp((vec3(lum) + (c - lum) * uSat) * uExposure, 0.0, 1.0);
   float size = uMin + (uMax - uMin) * pow(clamp(uDark > 0.5 ? lum : 1.0 - lum, 0.0, 1.0), uGamma);
-  // Gusts read as bands of light rolling through the grass, and soft light
-  // and shade drift through the clouds: light shrinks dots on the day canvas
-  // and grows them at night.
-  float glow = bend * 0.4 + sky * uMotion * 0.22 * (noise(uv * 4.0 + vec2(uTime * 0.05, uTime * 0.012)) - 0.5);
-  size = clamp(size + (uDark > 0.5 ? glow : -glow), 0.0, 1.0);
   // Light drifting across the field.
   size *= 1.0 + 0.1 * uMotion * (noise(cell * 0.07 + vec2(uTime * 0.11, uTime * 0.04)) - 0.5);
 
