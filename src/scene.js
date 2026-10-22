@@ -3,10 +3,17 @@
 // brightness. Day draws ink-sized dots on the light canvas; night grades the
 // same picture toward blue and draws light on dark.
 //
-// Motion stays light: dots dissolve in, in ordered-dither order, the first
-// time a scene appears (the hero only on the first visit of a session), then
-// the clouds billow and wind runs through the grass at 30 fps. Scenes pause
-// offscreen and in background tabs. Reduced motion gets one still frame.
+// Each stage rotates through a playlist of scenes. Every scene has its own
+// idle animation, built from a small set of effects (wind, clouds, sunlight,
+// flickering lamps, and particles drawn on the dot grid). To change scenes,
+// a ripple runs across the dots from the top right: each dot shrinks, swaps
+// to the new picture, and pops back. The new scene's idle animation starts
+// once the ripple has passed.
+//
+// Motion stays light: dots dissolve in the first time a stage appears (the
+// hero only on the first visit of a session), frames run at 30 fps, stages
+// pause offscreen and in background tabs, and only the current and next
+// pictures are loaded. Reduced motion gets one still frame and no rotation.
 (() => {
   const root = document.documentElement;
   const stages = [...document.querySelectorAll(".scene-stage")];
@@ -18,6 +25,9 @@
 
   const CELL = 6; // CSS pixels per dot
   const REVEAL_MS = 1100;
+  const DWELL_MS = 8000; // time each scene holds
+  const RIPPLE_MS = 1900;
+  const IDLE_IN_MS = 1200; // the new scene's idle animation fades in
   const FPS = 30;
   const LOOKS = {
     light: {
@@ -42,20 +52,148 @@
     },
   };
 
+  // Per-scene framing and idle animation. `subject` is where the scene's
+  // focus sits in the (mirrored, if `flip`) picture; each stage places it at
+  // its own anchor. Effects:
+  //   wind    sways regions whose hue is near windHue (grass, wheat, hair)
+  //   clouds  billows and drifts bright, pale sky above the skyline
+  //   sun     passes a soft band of warm light over bright areas
+  //   lamps   flickers bright, saturated lights
+  //   motes   particles on the dot grid: snow falls, petals and paper are
+  //           blown, dust rises; density is a share of all dots
+  // `contrast` below 1 calms busy pictures toward a light middle tone, so the
+  // copy over them stays easy to read.
+  const PARTICLES = { none: 0, snow: 1, blown: 2, dust: 3 };
+  const SCENES = {
+    hillside: {
+      flip: true,
+      subject: [0.68, 0.55],
+      wind: 1,
+      windHue: 0.22,
+      windWidth: 0.12,
+      clouds: 1,
+      skyline: 0.42,
+    },
+    "open-skies": {
+      subject: [0.75, 0.5],
+      contrast: 0.9,
+      wind: 0.9,
+      windHue: 0.96,
+      windWidth: 0.06,
+      clouds: 1.2,
+      skyline: 0.72,
+      motes: { kind: "blown", density: 0.004, speed: 4, color: [1, 1, 1] },
+    },
+    "golden-hour": {
+      flip: true,
+      subject: [0.6, 0.45],
+      wind: 1.2,
+      windHue: 0.09,
+      windWidth: 0.06,
+      sun: 1,
+      skyline: 0.35,
+      motes: {
+        kind: "blown",
+        density: 0.0025,
+        speed: 2.5,
+        color: [1, 0.93, 0.78],
+      },
+    },
+    "snowy-crossing": {
+      subject: [0.85, 0.82],
+      clouds: 0.7,
+      skyline: 0.35,
+      motes: { kind: "snow", density: 0.009, speed: 5, color: [1, 1, 1] },
+    },
+    "arcane-city": {
+      subject: [0.52, 0.45],
+      contrast: 0.8,
+      clouds: 0.3,
+      skyline: 0.4,
+      sun: 0.4,
+      lamps: 1,
+      motes: {
+        kind: "dust",
+        density: 0.004,
+        speed: 1.2,
+        color: [1, 0.9, 0.68],
+      },
+    },
+    "sunlit-study": {
+      subject: [0.55, 0.55],
+      contrast: 0.85,
+      wind: 0.6,
+      windHue: 0.27,
+      windWidth: 0.1,
+      clouds: 0.4,
+      skyline: 0.35,
+      sun: 0.7,
+      lamps: 0.4,
+      motes: {
+        kind: "dust",
+        density: 0.005,
+        speed: 1,
+        color: [1, 0.94, 0.78],
+      },
+    },
+    "sleepy-cats": {
+      subject: [0.72, 0.4],
+      wind: 0.7,
+      windHue: 0.3,
+      windWidth: 0.1,
+      sun: 0.45,
+      motes: {
+        kind: "dust",
+        density: 0.003,
+        speed: 0.8,
+        color: [1, 0.95, 0.82],
+      },
+    },
+  };
+
+  // Packs a scene's effects into the shader's three vec4s and a color.
+  function effects(config) {
+    const motes = config.motes || {};
+    return {
+      fx: [
+        config.wind || 0,
+        config.windHue ?? 0.22,
+        config.windWidth ?? 0.1,
+        config.clouds || 0,
+        config.skyline ?? 0.4,
+        config.sun || 0,
+        config.lamps || 0,
+        PARTICLES[motes.kind || "none"],
+        motes.density || 0,
+        motes.speed || 0,
+        config.contrast ?? 1,
+        0,
+      ],
+      motes: motes.color || [1, 1, 1],
+    };
+  }
+
   const VERTEX = `#version 300 es
 in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
   const FRAGMENT = `#version 300 es
 precision highp float;
-uniform sampler2D uImage;
+uniform sampler2D uImageA;
+uniform sampler2D uImageB;
+uniform vec4 uFrameA;
+uniform vec4 uFrameB;
+uniform vec2 uLod;
+uniform vec4 uFxA[3];
+uniform vec4 uFxB[3];
+uniform vec3 uMotesA;
+uniform vec3 uMotesB;
+uniform vec2 uIdle;
+uniform float uRipple;
+uniform float uHasB;
 uniform vec2 uRes;
 uniform float uCell;
-uniform vec2 uOrigin;
-uniform vec2 uScale;
-uniform float uLod;
 uniform vec3 uGround;
-uniform float uDark;
 uniform float uNight;
 uniform float uRound;
 uniform float uMin;
@@ -67,8 +205,6 @@ uniform vec2 uFade;
 uniform float uReveal;
 uniform float uTime;
 uniform float uMotion;
-uniform float uSkyline;
-uniform float uWind;
 out vec4 outColor;
 
 float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
@@ -88,43 +224,100 @@ float hue(vec3 c) {
   float h = hi == c.r ? mod((c.g - c.b) / d, 6.0) : hi == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;
   return h / 6.0;
 }
+float hueDistance(float a, float b) { return abs(fract(a - b + 0.5) - 0.5); }
+
+// One scene's color for a dot, with its idle animation. f0 = wind, wind hue,
+// wind hue width, clouds; f1 = skyline, sun, lamps, particle kind;
+// f2 = particle density, particle speed, contrast.
+vec3 scene(sampler2D image, vec4 frame, float lod, vec4 f0, vec4 f1, vec4 f2, vec3 moteColor, float idle, vec2 cell) {
+  vec2 uv = frame.xy + (cell + 0.5) * uCell / uRes * frame.zw;
+  float t = uTime;
+  float m = uMotion * idle;
+
+  // Classify the dot from a softer sample so the masks do not flicker.
+  vec3 soft = textureLod(image, uv, lod + 1.5).rgb;
+  float hi = max(soft.r, max(soft.g, soft.b));
+  float sat = hi > 0.0 ? (hi - min(soft.r, min(soft.g, soft.b))) / hi : 0.0;
+  float softLum = dot(soft, vec3(0.2126, 0.7152, 0.0722));
+
+  // Wind: a slow wave sways the windblown hue from side to side, stronger in
+  // passing gusts and toward the bottom, where things are nearest.
+  float blown = smoothstep(0.15, 0.3, sat) * (1.0 - smoothstep(f0.z * 0.7, f0.z, hueDistance(hue(soft), f0.y)));
+  float gust = 0.5 + 0.5 * noise(vec2(uv.x * 2.5 - t * 0.22, uv.y * 3.0));
+  float sway = sin(uv.x * 22.0 + uv.y * 9.0 - t * 1.4) * gust * blown * f0.x * m;
+  // Clouds: bright, pale sky above the skyline billows and drifts.
+  float sky = smoothstep(0.6, 0.8, softLum) * (1.0 - smoothstep(0.35, 0.5, sat))
+    * (1.0 - smoothstep(f1.x - 0.06, f1.x, uv.y)) * f0.w * m;
+  vec2 billow = vec2(noise(uv * 4.0 + t * 0.09), noise(uv * 4.0 + 17.0 - t * 0.075)) - 0.5;
+  vec2 shift = vec2(sway * 0.013 * mix(0.4, 1.0, smoothstep(0.3, 1.0, uv.y)), 0.0)
+    + (billow * 0.03 + vec2(0.035 * sin(t * 0.06), 0.0)) * sky;
+
+  vec3 c = textureLod(image, uv + shift, lod).rgb + max(sway, 0.0) * 0.05;
+  float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  // Sun: a soft band of warm light passes slowly over the bright areas.
+  float band = smoothstep(0.7, 1.0, sin((uv.x * 1.3 - uv.y) * 6.0 - t * 0.7));
+  c += vec3(0.16, 0.11, 0.05) * band * smoothstep(0.5, 0.85, lum) * f1.y * m;
+  // Lamps: bright, saturated lights flicker.
+  float lamps = smoothstep(0.6, 0.85, lum) * smoothstep(0.25, 0.45, sat);
+  c *= 1.0 + (noise(cell * 0.8 + t * 1.6) - 0.5) * 0.9 * lamps * f1.z * m;
+  c = mix(vec3(0.62), c, f2.z);
+
+  // Particles live on the dot grid itself, a dot each.
+  if (f1.w > 0.5 && m > 0.0) {
+    vec2 q = cell;
+    if (f1.w < 1.5) {
+      // Snow falls, weaving a little.
+      q.y -= t * f2.y;
+      q.x += floor(sin(t * 0.6 + q.y * 0.35) * 1.5);
+    } else if (f1.w < 2.5) {
+      // Petals and paper are blown to the left, rising and dipping.
+      q.x += t * f2.y;
+      q.y -= t * f2.y * 0.3 + floor(sin(t * 0.8 + cell.x * 0.2) * 1.2);
+    } else {
+      // Dust rises slowly and drifts.
+      q.y += t * f2.y;
+      q.x += floor(sin(t * 0.5 + cell.y * 0.25) * 1.5);
+    }
+    float h = hash(floor(q));
+    float shine = step(h, f2.x) * (0.6 + 0.4 * sin(t * 2.0 + h * 900.0));
+    c = mix(c, moteColor, clamp(shine, 0.0, 1.0) * m);
+  }
+  return c;
+}
 
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 cell = floor(px / uCell);
-  vec2 uv = uOrigin + (cell + 0.5) * uCell / uRes * uScale;
+  float order = bayer8(cell);
 
-  // Classify the cell from a softer sample so the masks do not flicker:
-  // yellow-green grass bends in the wind; bright, pale sky billows.
-  vec3 soft = textureLod(uImage, uv, uLod + 1.5).rgb;
-  float hi = max(soft.r, max(soft.g, soft.b));
-  float sat = hi > 0.0 ? (hi - min(soft.r, min(soft.g, soft.b))) / hi : 0.0;
-  float grass = smoothstep(0.15, 0.3, sat) * (1.0 - smoothstep(0.08, 0.12, abs(hue(soft) - 0.22)));
-  float sky = smoothstep(0.6, 0.8, dot(soft, vec3(0.2126, 0.7152, 0.0722)))
-    * (1.0 - smoothstep(0.35, 0.5, sat))
-    * (1.0 - smoothstep(uSkyline - 0.06, uSkyline, uv.y));
+  // The ripple spreads from the top right corner to the bottom left. Each
+  // dot shrinks as it arrives, swaps pictures at its smallest, then pops back.
+  float wave = 0.0;
+  if (uHasB > 0.5) {
+    vec2 aspect = vec2(uRes.x / uRes.y, 1.0);
+    vec2 center = (cell + 0.5) * uCell / uRes;
+    float d = length(vec2(1.0 - center.x, center.y) * aspect) / length(aspect);
+    float width = 0.28;
+    wave = clamp((uRipple * (1.0 + width + 0.06) - d - order * 0.06) / width, 0.0, 1.0);
+  }
+  vec3 c = wave >= 0.5
+    ? scene(uImageB, uFrameB, uLod.y, uFxB[0], uFxB[1], uFxB[2], uMotesB, uIdle.y, cell)
+    : scene(uImageA, uFrameA, uLod.x, uFxA[0], uFxA[1], uFxA[2], uMotesA, uIdle.x, cell);
 
-  // Wind: a slow wave sways the grass from side to side, a little stronger
-  // in passing gusts and toward the bottom, where the blades are nearest.
-  float gust = 0.5 + 0.5 * noise(vec2(uv.x * 2.5 - uTime * 0.22, uv.y * 3.0));
-  float sway = sin(uv.x * 22.0 + uv.y * 9.0 - uTime * 1.4) * gust * grass * uWind * uMotion;
-  // Clouds billow and drift slowly back and forth.
-  vec2 billow = vec2(noise(uv * 4.0 + uTime * 0.09), noise(uv * 4.0 + 17.0 - uTime * 0.075)) - 0.5;
-  vec2 shift = vec2(sway * 0.013 * smoothstep(0.35, 1.0, uv.y), 0.0)
-    + (billow * 0.03 + vec2(0.035 * sin(uTime * 0.06), 0.0)) * sky * uMotion;
-
-  vec3 c = textureLod(uImage, uv + shift, uLod).rgb + max(sway, 0.0) * 0.05;
   if (uNight > 0.5) c = pow(clamp(c * vec3(0.55, 0.66, 0.98), 0.0, 1.0), vec3(1.15));
   float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
   vec3 col = clamp((vec3(lum) + (c - lum) * uSat) * uExposure, 0.0, 1.0);
-  float size = uMin + (uMax - uMin) * pow(clamp(uDark > 0.5 ? lum : 1.0 - lum, 0.0, 1.0), uGamma);
+  float size = uMin + (uMax - uMin) * pow(clamp(uNight > 0.5 ? lum : 1.0 - lum, 0.0, 1.0), uGamma);
   // Light drifting across the field.
   size *= 1.0 + 0.1 * uMotion * (noise(cell * 0.07 + vec2(uTime * 0.11, uTime * 0.04)) - 0.5);
+  if (uHasB > 0.5)
+    size *= wave < 0.5
+      ? 1.0 - 0.95 * smoothstep(0.0, 0.5, wave)
+      : 0.05 + 1.05 * smoothstep(0.5, 0.85, wave) - 0.1 * smoothstep(0.85, 1.0, wave);
 
   // Edges dissolve in an ordered pattern instead of fading.
   float v = (cell.y + 0.5) * uCell / uRes.y;
   float keep = (uFade.x > 0.0 ? smoothstep(0.0, uFade.x, v) : 1.0) * (uFade.y > 0.0 ? 1.0 - smoothstep(1.0 - uFade.y, 1.0, v) : 1.0);
-  float order = bayer8(cell);
   if (keep <= order) size = 0.0;
   // The first appearance: dots pop in by dither order, the top a little first.
   float start = order * 0.7 + v * 0.3;
@@ -143,14 +336,21 @@ void main() {
 }`;
 
   const UNIFORMS = [
-    "uImage",
+    "uImageA",
+    "uImageB",
+    "uFrameA",
+    "uFrameB",
+    "uLod",
+    "uFxA",
+    "uFxB",
+    "uMotesA",
+    "uMotesB",
+    "uIdle",
+    "uRipple",
+    "uHasB",
     "uRes",
     "uCell",
-    "uOrigin",
-    "uScale",
-    "uLod",
     "uGround",
-    "uDark",
     "uNight",
     "uRound",
     "uMin",
@@ -162,8 +362,6 @@ void main() {
     "uReveal",
     "uTime",
     "uMotion",
-    "uSkyline",
-    "uWind",
   ];
 
   class WebGLRenderer {
@@ -210,13 +408,16 @@ void main() {
       this.u = Object.fromEntries(
         UNIFORMS.map((name) => [name, gl.getUniformLocation(program, name)]),
       );
+      this.textures = new Map();
       this.gl = gl;
       this.canvas = canvas;
     }
 
     upload(image) {
+      if (this.textures.has(image)) return;
       const gl = this.gl;
-      gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
@@ -234,20 +435,50 @@ void main() {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.textures.set(image, texture);
+    }
+
+    // Only the current and next pictures stay on the GPU.
+    release(keep) {
+      for (const [image, texture] of this.textures)
+        if (!keep.includes(image)) {
+          this.gl.deleteTexture(texture);
+          this.textures.delete(image);
+        }
     }
 
     draw(s) {
       const { gl, u, canvas } = this;
       const look = s.look;
+      const slots = [s.a, s.b || s.a];
+      slots.forEach((slot, unit) => {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, this.textures.get(slot.image));
+      });
       gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.uniform1i(u.uImage, 0);
+      gl.uniform1i(u.uImageA, 0);
+      gl.uniform1i(u.uImageB, 1);
+      gl.uniform4f(
+        u.uFrameA,
+        ...slots[0].frame.origin,
+        ...slots[0].frame.scale,
+      );
+      gl.uniform4f(
+        u.uFrameB,
+        ...slots[1].frame.origin,
+        ...slots[1].frame.scale,
+      );
+      gl.uniform2f(u.uLod, slots[0].frame.lod, slots[1].frame.lod);
+      gl.uniform4fv(u.uFxA, slots[0].effects.fx);
+      gl.uniform4fv(u.uFxB, slots[1].effects.fx);
+      gl.uniform3f(u.uMotesA, ...slots[0].effects.motes);
+      gl.uniform3f(u.uMotesB, ...slots[1].effects.motes);
+      gl.uniform2f(u.uIdle, slots[0].idle, slots[1].idle);
+      gl.uniform1f(u.uRipple, s.ripple);
+      gl.uniform1f(u.uHasB, s.b ? 1 : 0);
       gl.uniform2f(u.uRes, canvas.width, canvas.height);
       gl.uniform1f(u.uCell, s.cell);
-      gl.uniform2f(u.uOrigin, ...s.frame.origin);
-      gl.uniform2f(u.uScale, ...s.frame.scale);
-      gl.uniform1f(u.uLod, Math.log2(Math.max(s.frame.texelsPerCell, 1)));
       gl.uniform3f(u.uGround, ...look.ground.map((value) => value / 255));
-      gl.uniform1f(u.uDark, look.night);
       gl.uniform1f(u.uNight, look.night);
       gl.uniform1f(u.uRound, look.round);
       gl.uniform1f(u.uMin, look.min);
@@ -259,13 +490,11 @@ void main() {
       gl.uniform1f(u.uReveal, s.reveal);
       gl.uniform1f(u.uTime, s.time);
       gl.uniform1f(u.uMotion, s.motion ? 1 : 0);
-      gl.uniform1f(u.uSkyline, s.skyline);
-      gl.uniform1f(u.uWind, s.wind);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
   }
 
-  // Without WebGL2: the same dots as one still frame, drawn with Canvas 2D.
+  // Without WebGL2: the first scene's dots as one still frame, in Canvas 2D.
   class CanvasRenderer {
     constructor(canvas) {
       this.canvas = canvas;
@@ -273,19 +502,20 @@ void main() {
       this.sample = document.createElement("canvas");
     }
 
-    upload(image) {
-      this.image = image;
-    }
+    upload() {}
+
+    release() {}
 
     draw(s) {
-      const { canvas, ctx, sample, image } = this;
+      const { canvas, ctx, sample } = this;
+      const { image, frame } = s.a;
       const look = s.look;
       const cols = Math.ceil(canvas.width / s.cell);
       const rows = Math.ceil(canvas.height / s.cell);
       sample.width = cols;
       sample.height = rows;
       const sctx = sample.getContext("2d", { willReadFrequently: true });
-      const { origin, scale } = s.frame;
+      const { origin, scale } = frame;
       const iw = image.naturalWidth;
       const ih = image.naturalHeight;
       sctx.save();
@@ -366,51 +596,51 @@ void main() {
     return value;
   }
   const numbers = (value) => (value ? value.split(" ").map(Number) : null);
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 
-  // Cover-fit the (optionally mirrored and cropped) picture to the canvas,
-  // with a slow zoom and pan so it breathes under the fixed grid.
-  function framing(scene, time, motion) {
-    const { width: w, height: h } = scene.canvas;
-    const iw = scene.image.naturalWidth;
-    const ih = scene.image.naturalHeight;
-    const crop = (h > w && scene.cropPortrait) || [0, 0, 1, 1];
-    const regionW = (crop[2] - crop[0]) * iw;
-    const regionH = (crop[3] - crop[1]) * ih;
-    let sw = regionW;
-    let sh = (regionW * h) / w;
-    if (sh > regionH) {
-      sh = regionH;
-      sw = (regionH * w) / h;
+  // Cover-fit the picture to the canvas with the scene's subject at the
+  // stage's anchor, plus a slow zoom and pan so it breathes under the grid.
+  function framing(player, config, image, time, motion) {
+    const { width: w, height: h } = player.canvas;
+    const iw = image.naturalWidth;
+    const ih = image.naturalHeight;
+    let sw = iw;
+    let sh = (iw * h) / w;
+    if (sh > ih) {
+      sh = ih;
+      sw = (ih * w) / h;
     }
     const zoom = 1.04 + (motion ? 0.015 * Math.sin(time * 0.045) : 0);
     sw /= zoom;
     sh /= zoom;
+    const anchor = (h > w && player.anchorPortrait) || player.anchor;
     const panX = motion ? 0.012 * Math.sin(time * 0.06) * sw : 0;
     const panY = motion ? 0.008 * Math.cos(time * 0.05) * sh : 0;
-    const x0 = crop[0] * iw;
-    const y0 = crop[1] * ih;
-    const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
     const sx = clamp(
-      x0 + (regionW - sw) * scene.focus[0] + panX,
-      x0,
-      x0 + regionW - sw,
+      config.subject[0] * iw - anchor[0] * sw + panX,
+      0,
+      iw - sw,
     );
     const sy = clamp(
-      y0 + (regionH - sh) * scene.focus[1] + panY,
-      y0,
-      y0 + regionH - sh,
+      config.subject[1] * ih - anchor[1] * sh + panY,
+      0,
+      ih - sh,
     );
     const origin = [sx / iw, sy / ih];
     const scale = [sw / iw, sh / ih];
-    // Crops are written for the mirrored picture; map back to the texture.
-    if (scene.flip) {
+    // The subject is given for the mirrored picture; map back to the texture.
+    if (config.flip) {
       origin[0] = 1 - origin[0];
       scale[0] = -scale[0];
     }
-    return { origin, scale, texelsPerCell: sw / (w / scene.cell) };
+    return {
+      origin,
+      scale,
+      lod: Math.log2(Math.max(sw / (w / player.cell), 1)),
+    };
   }
 
-  const scenes = stages.map((stage) => {
+  const players = stages.map((stage) => {
     const canvas = stage.querySelector("canvas");
     let renderer;
     try {
@@ -418,18 +648,23 @@ void main() {
     } catch {
       renderer = new CanvasRenderer(canvas);
     }
+    const playlist = JSON.parse(stage.dataset.scenes).filter(
+      (entry) => SCENES[entry.key],
+    );
     return {
       stage,
       canvas,
       renderer,
       animated: renderer instanceof WebGLRenderer,
-      flip: stage.dataset.flip === "true",
-      cropPortrait: numbers(stage.dataset.cropPortrait),
-      focus: numbers(stage.dataset.focus) || [0.5, 0.5],
+      playlist,
+      index: 0,
+      anchor: numbers(stage.dataset.anchor) || [0.5, 0.5],
+      anchorPortrait: numbers(stage.dataset.anchorPortrait),
       fade: numbers(stage.dataset.fade) || [0, 0],
-      skyline: Number(stage.dataset.skyline) || 0,
-      wind: Number(stage.dataset.wind) || 0,
-      image: null,
+      images: new Map(), // key -> decoded image
+      current: null, // { key, image, idleFrom }
+      next: null, // { key, image, rippleFrom }
+      dwell: 0,
       visible: false,
       revealFrom: null,
       // The hero only dissolves in on the first visit of a session.
@@ -440,73 +675,135 @@ void main() {
 
   const motion = () => !reduceMotion.matches;
 
-  function draw(scene, now = performance.now()) {
-    if (!scene.image || !scene.canvas.width) return;
-    const moving = motion() && scene.animated;
-    const time = now / 1000;
+  function load(player, entry) {
+    if (player.images.has(entry.key)) return player.images.get(entry.key);
+    const image = new Image();
+    image.decoding = "async";
+    image.src = entry.src;
+    const ready = image.decode().then(() => image);
+    player.images.set(entry.key, ready);
+    // A failed load is forgotten, so the next attempt fetches it again.
+    ready.catch(() => player.images.delete(entry.key));
+    return ready;
+  }
+
+  function slot(player, entry, now, moving) {
+    const config = SCENES[entry.key];
+    const idle = entry.idleFrom
+      ? smooth(0, 1, (now - entry.idleFrom) / IDLE_IN_MS)
+      : entry.rippleFrom !== undefined
+        ? 0
+        : 1;
+    return {
+      image: entry.image,
+      frame: framing(player, config, entry.image, now / 1000, moving),
+      effects: effects(config),
+      idle,
+    };
+  }
+
+  function draw(player, now = performance.now()) {
+    if (!player.current || !player.canvas.width) return;
+    const moving = motion() && player.animated;
     let reveal = 1;
-    // Infinity marks a reveal that waits for the scene to come into view.
-    if (scene.revealFrom !== null)
-      reveal = Math.min(1, Math.max(0, (now - scene.revealFrom) / REVEAL_MS));
-    if (reveal >= 1) scene.revealFrom = null;
-    scene.renderer.draw({
+    // Infinity marks a reveal that waits for the stage to come into view.
+    if (player.revealFrom !== null)
+      reveal = Math.min(1, Math.max(0, (now - player.revealFrom) / REVEAL_MS));
+    if (reveal >= 1) player.revealFrom = null;
+    const ripple = player.next
+      ? Math.min(1, (now - player.next.rippleFrom) / RIPPLE_MS)
+      : 0;
+    player.renderer.draw({
       look: LOOKS[isDark() ? "dark" : "light"],
-      cell: scene.cell,
-      frame: framing(scene, time, moving),
-      fade: scene.fade,
+      cell: player.cell,
+      a: slot(player, player.current, now, moving),
+      b: player.next ? slot(player, player.next, now, moving) : null,
+      ripple: player.next ? smooth(0, 1, ripple) : 0,
+      fade: player.fade,
       reveal: 1 - (1 - reveal) ** 3,
-      time,
+      time: now / 1000,
       motion: moving,
-      skyline: scene.skyline,
-      wind: scene.wind,
     });
   }
 
-  function resize(scene) {
-    const rect = scene.stage.getBoundingClientRect();
+  function resize(player) {
+    const rect = player.stage.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    scene.canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    scene.canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    scene.cell = Math.max(2, Math.round(CELL * dpr));
-    draw(scene);
+    player.canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    player.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    player.cell = Math.max(2, Math.round(CELL * dpr));
+    draw(player);
   }
 
-  function maybeReveal(scene) {
-    if (!scene.image || !scene.visible || !scene.mayReveal) return;
-    scene.mayReveal = false;
-    if (motion() && scene.animated) scene.revealFrom = performance.now();
-    draw(scene);
+  function maybeReveal(player) {
+    if (!player.current || !player.visible || !player.mayReveal) return;
+    player.mayReveal = false;
+    if (motion() && player.animated) player.revealFrom = performance.now();
+    draw(player);
+  }
+
+  // Advances a stage's rotation: count visible time on the current scene,
+  // preload the next one, run the ripple, then hand over.
+  function advance(player, now, elapsed) {
+    if (player.playlist.length < 2 || player.revealFrom !== null) return;
+    if (player.next) {
+      if (now - player.next.rippleFrom < RIPPLE_MS) return;
+      player.current = { ...player.next, idleFrom: now };
+      player.next = null;
+      player.dwell = 0;
+      player.renderer.release([player.current.image]);
+      return;
+    }
+    player.dwell += elapsed;
+    const upcoming =
+      player.playlist[(player.index + 1) % player.playlist.length];
+    // Start fetching the next picture a few seconds ahead.
+    if (player.dwell > DWELL_MS - 5000) load(player, upcoming);
+    if (player.dwell < DWELL_MS || player.pending) return;
+    player.pending = true;
+    load(player, upcoming)
+      .then((image) => {
+        player.pending = false;
+        player.renderer.upload(image);
+        player.index = (player.index + 1) % player.playlist.length;
+        player.next = {
+          key: upcoming.key,
+          image,
+          rippleFrom: performance.now(),
+        };
+      })
+      .catch(() => {
+        player.pending = false;
+        player.dwell = 0;
+      });
   }
 
   const visibility = new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      const scene = scenes.find((item) => item.stage === entry.target);
-      scene.visible = entry.isIntersecting;
-      maybeReveal(scene);
+      const player = players.find((item) => item.stage === entry.target);
+      player.visible = entry.isIntersecting;
+      maybeReveal(player);
     }
   });
   const sizes = new ResizeObserver((entries) => {
     for (const entry of entries)
-      resize(scenes.find((item) => item.stage === entry.target));
+      resize(players.find((item) => item.stage === entry.target));
   });
 
-  for (const scene of scenes) {
-    resize(scene);
-    visibility.observe(scene.stage);
-    sizes.observe(scene.stage);
-    const image = new Image();
-    image.decoding = "async";
-    image.src = scene.stage.dataset.src;
-    image
-      .decode()
-      .then(() => {
-        scene.image = image;
-        scene.renderer.upload(image);
-        // Until it is seen, a revealing scene stays an empty field.
-        if (scene.mayReveal && motion() && scene.animated)
-          scene.revealFrom = Infinity;
-        maybeReveal(scene);
-        draw(scene);
+  for (const player of players) {
+    resize(player);
+    visibility.observe(player.stage);
+    sizes.observe(player.stage);
+    const first = player.playlist[0];
+    load(player, first)
+      .then((image) => {
+        player.renderer.upload(image);
+        player.current = { key: first.key, image };
+        // Until it is seen, a revealing stage stays an empty field.
+        if (player.mayReveal && motion() && player.animated)
+          player.revealFrom = Infinity;
+        maybeReveal(player);
+        draw(player);
       })
       .catch(() => {});
   }
@@ -522,32 +819,41 @@ void main() {
     requestAnimationFrame(tick);
     const interval = now - previous;
     previous = now;
-    if (document.hidden || !motion()) return;
-    const active = scenes.filter(
-      (scene) => scene.visible && scene.animated && scene.image,
+    if (document.hidden || !motion()) {
+      last = now;
+      return;
+    }
+    const active = players.filter(
+      (player) => player.visible && player.animated && player.current,
     );
     if (active.length && interval < 1000) {
       frameAverage += (interval - frameAverage) * 0.1;
       frameSamples += 1;
       if (frameSamples > 30 && frameAverage > SLOW_FRAME_MS) {
-        for (const scene of scenes) {
-          scene.animated = false;
-          scene.revealFrom = null;
-          draw(scene, now);
+        for (const player of players) {
+          player.animated = false;
+          player.revealFrom = null;
+          player.next = null;
+          draw(player, now);
         }
         return;
       }
     }
-    const revealing = active.some(
-      (scene) => scene.revealFrom !== null && scene.revealFrom <= now,
+    const busy = active.some(
+      (player) =>
+        (player.revealFrom !== null && player.revealFrom <= now) || player.next,
     );
-    if (!revealing && now - last < 1000 / FPS) return;
+    if (!busy && now - last < 1000 / FPS) return;
+    const elapsed = Math.min(now - last, 250);
     last = now;
-    for (const scene of active) draw(scene, now);
+    for (const player of active) {
+      advance(player, now, elapsed);
+      draw(player, now);
+    }
   }
   requestAnimationFrame(tick);
 
-  const redraw = () => scenes.forEach((scene) => draw(scene));
+  const redraw = () => players.forEach((player) => draw(player));
   document.addEventListener("portfolio:themechange", redraw);
   systemDark.addEventListener("change", redraw);
   reduceMotion.addEventListener("change", redraw);

@@ -152,6 +152,19 @@ assert.equal(
   "Hero and contact scenes",
 );
 assert(home.includes('<main id="main" class="dot-paper">'), "Home dot paper");
+// Every scene in each stage's playlist must exist, and the two stages start
+// on different scenes.
+const playlists = [...home.matchAll(/data-scenes="([^"]+)"/g)].map(
+  ([, value]) =>
+    JSON.parse(value.replaceAll("&quot;", '"').replaceAll("&amp;", "&")),
+);
+assert.equal(playlists.length, 2, "Scene playlists for hero and contact");
+assert.notEqual(playlists[0][0].key, playlists[1][0].key, "Distinct openers");
+for (const playlist of playlists) {
+  assert(playlist.length >= 2, "Scenes rotate");
+  for (const { key, src } of playlist)
+    assert((await stat(path.join(root, src))).isFile(), `Scene image ${key}`);
+}
 assert(
   /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.dot-paper::after/.test(
     styles,

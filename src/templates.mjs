@@ -42,13 +42,31 @@ export function navigation() {
   </header>`;
 }
 
-// A decorative scene drawn as a dot grid by src/scene.js. Without WebGL or
-// JavaScript the stage stays a plain field of the page color.
-function sceneStage(scenes, key, options) {
+// The order the scenes rotate in. The hero and the contact band start about
+// half a cycle apart, so they open on different pictures.
+const sceneOrder = [
+  "hillside",
+  "open-skies",
+  "golden-hour",
+  "snowy-crossing",
+  "arcane-city",
+  "sunlit-study",
+  "sleepy-cats",
+];
+
+// A decorative scene drawn as a dot grid by src/scene.js, rotating through
+// the pictures from `start`. Without WebGL or JavaScript the stage stays a
+// plain field of the page color.
+function sceneStage(scenes, start, options) {
+  const first = sceneOrder.indexOf(start);
+  const playlist = [
+    ...sceneOrder.slice(first),
+    ...sceneOrder.slice(0, first),
+  ].map((key) => ({ key, src: scenes[key] }));
   const data = Object.entries(options)
     .map(([name, value]) => `data-${name}="${escape(value)}"`)
     .join(" ");
-  return `<div class="scene-stage" data-src="${scenes[key]}" ${data} aria-hidden="true"><canvas></canvas></div>`;
+  return `<div class="scene-stage" data-src="${scenes[start]}" data-scenes="${escape(JSON.stringify(playlist))}" ${data} aria-hidden="true"><canvas></canvas></div>`;
 }
 
 export function footer() {
@@ -127,11 +145,9 @@ export function home(images, scenes) {
   // portrait screen the crop moves in on them, below the stacked buttons.
   return `<section class="home-hero" aria-labelledby="hero-title">
     ${sceneStage(scenes, "hillside", {
-      flip: "true",
-      "crop-portrait": "0.46 0 0.9 0.8",
+      anchor: "0.72 0.62",
+      "anchor-portrait": "0.5 0.72",
       fade: "0 0.17",
-      skyline: "0.42",
-      wind: "1",
     })}
     <div class="home-hero-copy container">
       <p class="eyebrow hero-arrival"><span class="eyebrow-tag">Now</span> Product Lead at RF Labs</p>
@@ -162,11 +178,9 @@ export function home(images, scenes) {
   </section>
   <section class="contact-band" aria-labelledby="contact-title">
     ${sceneStage(scenes, "snowy-crossing", {
-      focus: "0.5 0.75",
-      "crop-portrait": "0.55 0.25 1 1",
+      anchor: "0.72 0.55",
+      "anchor-portrait": "0.5 0.75",
       fade: "0.3 0.3",
-      skyline: "0.2",
-      wind: "0",
     })}
     <div class="contact-copy container" data-reveal>
       <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> Get in touch</p>
