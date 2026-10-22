@@ -1,4 +1,9 @@
 import { profile, projects } from "./projects.mjs";
+import {
+  imageAttributes,
+  heroImageSizes,
+  projectImageSizes,
+} from "./images.mjs";
 
 export const escape = (value) =>
   String(value).replace(
@@ -13,13 +18,17 @@ const external = (url, label, className = "") =>
   `<a class="${className}" href="${escape(url)}" target="_blank" rel="noopener noreferrer">${label}<span class="sr-only"> (opens in a new tab)</span></a>`;
 const projectUrl = (project) => `/work/${project.slug}/`;
 
-export function picture(project, { caseStudy = false, eager = false } = {}) {
+export function picture(
+  project,
+  { caseStudy = false, eager = false, images } = {},
+) {
   const ofcCase = caseStudy && project.slug === "ofc-mobile";
   const imageBreakpoint =
     caseStudy || project.slug === "broadcast-graphics" ? 767 : 1199;
+  const sizes = projectImageSizes(project, caseStudy);
   return `<picture class="project-picture">
-    <source media="(max-width: ${imageBreakpoint}px)" srcset="/assets/${project.image}-mobile.webp" width="350" height="${project.mobileHeight}">
-    <img src="/assets/${ofcCase ? "ofc-case" : `${project.image}-desktop`}.webp" width="${ofcCase ? 1312 : project.imageWidth}" height="${ofcCase ? 640 : project.imageHeight}" alt="${escape(project.alt)}" loading="${eager ? "eager" : "lazy"}" decoding="async" ${eager ? 'fetchpriority="high"' : ""}>
+    <source media="(max-width: ${imageBreakpoint}px)" ${imageAttributes(`${project.image}-mobile`, images, sizes, { source: true })} width="350" height="${project.mobileHeight}">
+    <img ${imageAttributes(ofcCase ? "ofc-case" : `${project.image}-desktop`, images, sizes)} width="${ofcCase ? 1312 : project.imageWidth}" height="${ofcCase ? 640 : project.imageHeight}" alt="${escape(project.alt)}" loading="${eager ? "eager" : "lazy"}" decoding="async" ${eager ? 'fetchpriority="high"' : ""}>
   </picture>`;
 }
 
@@ -49,6 +58,7 @@ export function shell({
   content,
   css,
   js,
+  socialImageUrl,
   page = "project",
   noindex = false,
 }) {
@@ -62,7 +72,7 @@ export function shell({
   ${noindex ? '<meta name="robots" content="noindex">' : ""}
   <meta property="og:type" content="website"><meta property="og:site_name" content="Jacob Gil">
   <meta property="og:title" content="${escape(title)}"><meta property="og:description" content="${escape(description)}">
-  <meta property="og:url" content="${profile.site}${path}"><meta property="og:image" content="${profile.site}/assets/social-preview.webp">
+  <meta property="og:url" content="${profile.site}${path}"><meta property="og:image" content="${profile.site}${socialImageUrl}">
   <meta property="og:image:alt" content="Jacob Gil’s portfolio: Good ideas. Real products.">
   <meta name="twitter:card" content="summary_large_image">
   <script>try{const t=localStorage.getItem('portfolio-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;document.documentElement.dataset.arrive=sessionStorage.getItem('portfolio-arrived')?'false':'true';sessionStorage.setItem('portfolio-arrived','1')}catch{}</script>
@@ -74,11 +84,11 @@ export function shell({
 </html>`;
 }
 
-function workCard(project, { tool = false, broadcast = false } = {}) {
+function workCard(project, { tool = false, broadcast = false, images } = {}) {
   return `<article class="work-card ${tool ? "tool-card" : ""} ${broadcast ? "broadcast-card" : ""}" data-reveal>
     ${tool && project.eyebrow ? `<p class="card-eyebrow">${project.eyebrow}</p>` : ""}
     <a class="project-link" href="${projectUrl(project)}">
-      <div class="project-visual">${picture(project)}</div>
+      <div class="project-visual">${picture(project, { images })}</div>
       <div class="project-caption"><div class="project-title"><h3>${escape(project.title)}</h3>${arrow}</div>
         <p class="project-description">${escape(project.description)}</p>
         <p class="project-tags">${escape(project.tags)}</p>
@@ -87,7 +97,7 @@ function workCard(project, { tool = false, broadcast = false } = {}) {
   </article>`;
 }
 
-export function home() {
+export function home(images) {
   const [ofc, taiwanese, broadcast, recorder, tracker, audio, slopmeter] =
     projects;
   return `<section class="hero container" aria-labelledby="hero-title">
@@ -97,14 +107,14 @@ export function home() {
       <p class="hero-intro hero-arrival"><span class="desktop-intro">I’m Jacob. I build thoughtful software, from mobile products for live events to the graphics that bring the action on air.</span><span class="mobile-intro">I’m Jacob. I build thoughtful software, from live event apps to broadcast graphics.</span></p>
       <div class="hero-actions hero-arrival"><a class="button button-primary" href="#work">Explore my work <span aria-hidden="true">↓</span></a><p>Product Lead at RF Labs</p></div>
     </div>
-    <picture class="hero-art hero-arrival"><source media="(max-width:767px)" srcset="/assets/hero-mobile.webp" width="350" height="334"><img src="/assets/hero-desktop.webp" width="424" height="400" alt="OFC Mobile’s play library and multiplayer poker table." fetchpriority="high" decoding="async"></picture>
+    <picture class="hero-art hero-arrival"><source media="(max-width:767px)" ${imageAttributes("hero-mobile", images, heroImageSizes, { source: true })} width="350" height="334"><img ${imageAttributes("hero-desktop", images, heroImageSizes)} width="424" height="400" alt="OFC Mobile’s play library and multiplayer poker table." fetchpriority="high" decoding="async"></picture>
   </section>
   <section class="selected-work container" id="work" aria-labelledby="work-title">
     <div class="section-header"><h2 id="work-title">Selected work</h2><a class="subtle-link" href="/work/">Explore the project library <span aria-hidden="true">↗</span></a></div>
-    <div class="work-row row-lead">${workCard(ofc)}${workCard(taiwanese)}</div>
-    ${workCard(broadcast, { broadcast: true })}
-    <div class="work-row row-secondary">${workCard(recorder)}${workCard(tracker)}</div>
-    <div class="work-row row-tools">${workCard(audio, { tool: true })}${workCard(slopmeter, { tool: true })}</div>
+    <div class="work-row row-lead">${workCard(ofc, { images })}${workCard(taiwanese, { images })}</div>
+    ${workCard(broadcast, { broadcast: true, images })}
+    <div class="work-row row-secondary">${workCard(recorder, { images })}${workCard(tracker, { images })}</div>
+    <div class="work-row row-tools">${workCard(audio, { tool: true, images })}${workCard(slopmeter, { tool: true, images })}</div>
   </section>
   <section class="archive container" aria-labelledby="archive-title" data-reveal>
     <h2 id="archive-title">An early collaboration</h2><p class="section-description">One from the archive. Built with a team, kept for the story.</p>
@@ -155,12 +165,12 @@ export function library() {
   </section>`;
 }
 
-export function caseStudy(project) {
+export function caseStudy(project, images) {
   const next = projects[(projects.indexOf(project) + 1) % projects.length];
   return `<article class="case-study container">
     <div class="case-heading"><a class="back-link subtle-link" href="/work/">← All work</a><h1>${escape(project.title)}.</h1><p>${escape(project.summary)}</p></div>
     <dl class="case-facts"><div><dt>My role</dt><dd>${escape(project.role)}</dd></div><div><dt>Platform</dt><dd>${escape(project.platform)}</dd></div><div><dt>Project</dt><dd>${escape(project.context)}</dd></div></dl>
-    ${project.image ? `<div class="case-visual">${picture(project, { caseStudy: true, eager: true })}</div>` : ""}
+    ${project.image ? `<div class="case-visual">${picture(project, { caseStudy: true, eager: true, images })}</div>` : ""}
     <div class="case-sections">${project.sections.map(([title, body]) => `<section data-reveal><h2>${escape(title)}</h2><p>${escape(body)}</p></section>`).join("")}</div>
     <section class="case-details" data-reveal><div><h2>${escape(project.detailsTitle)}</h2><p>${escape(project.detailsIntro)}</p></div><div class="detail-list">${project.details.map(([title, body]) => `<div><h3>${escape(title)}</h3><p>${escape(body)}</p></div>`).join("")}</div></section>
     ${project.source || project.note ? `<aside class="case-source" aria-label="Project credits and links">${project.note ? `<p>${escape(project.note)}</p>` : ""}<div class="source-links">${project.source ? external(project.source, `View source ${arrow}`, "text-link") : ""}${project.upstream ? external(project.upstream, `Original slopmeter ${arrow}`, "text-link") : ""}</div></aside>` : ""}

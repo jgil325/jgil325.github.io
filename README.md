@@ -29,7 +29,8 @@ The validation checks every static page, internal links and anchors, image descr
 - Edit `src/templates.mjs` for page structure and shared content.
 - Edit `src/styles.css` for the responsive design and motion tokens.
 - Edit `src/client.js` for the theme switch and project library interactions.
-- Replace approved visual compositions in `assets/source/`. The build converts them to WebP.
+- Replace approved visual compositions in `assets/source/` with high resolution Paper exports: at least 4096 px wide for project desktop/case images, 2304 px for mobile, and 1536 px for hero artwork. Do not enlarge the old 1× PNGs. The build creates responsive lossless WebP sizes with content hashes in their URLs.
+- `src/images.mjs` keeps browser image selection aligned with the desktop, tablet, mobile, and case-study layouts. Image validation checks every `srcset` candidate and enough resolution for 3× displays.
 
 The site has no runtime framework, tracking scripts, API keys, or backend. Each project has a real static URL that can be opened directly. The page content works without JavaScript; search, filters, theme preferences, and motion are progressive enhancements.
 

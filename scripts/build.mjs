@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import sharp from "sharp";
+import assert from "node:assert/strict";
 import { profile, projects } from "../src/projects.mjs";
 import {
   shell,
@@ -35,17 +36,61 @@ for (const [type, source] of [
   await writeFile(path.join(out, "assets", manifest[type]), content);
 }
 const sourceAssets = path.join(root, "assets/source");
+const images = {};
+const imageWidths = [
+  360, 480, 640, 768, 960, 1200, 1536, 1920, 2304, 2688, 3072, 4096,
+];
+async function saveImage(name, buffer) {
+  const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 10);
+  const filename = `${name}-${hash}.webp`;
+  await writeFile(path.join(out, "assets", filename), buffer);
+  return `/assets/${filename}`;
+}
 for (const filename of await readdir(sourceAssets)) {
-  if (!filename.endsWith(".png")) continue;
-  await sharp(path.join(sourceAssets, filename))
-    .webp({ quality: 90, effort: 5, alphaQuality: 100 })
-    .toFile(path.join(out, "assets", filename.replace(/\.png$/, ".webp")));
+  if (!filename.endsWith(".png") || filename === "social-preview.png") continue;
+  const key = filename.replace(/\.png$/, "");
+  const source = path.join(sourceAssets, filename);
+  const metadata = await sharp(source).metadata();
+  const minimumWidth = key.startsWith("hero-")
+    ? 1536
+    : key.endsWith("-mobile")
+      ? 2304
+      : 4096;
+  assert(
+    metadata.width >= minimumWidth,
+    `${filename}: re-export from Paper at ${minimumWidth}px or wider; do not upscale a 1x export.`,
+  );
+  const widths = imageWidths.filter((width) => width <= metadata.width);
+  const variants = [];
+  for (const width of widths) {
+    // Lossless WebP preserves the small text and card details in UI captures.
+    const { data, info } = await sharp(source)
+      .resize({ width, withoutEnlargement: true })
+      .webp({ lossless: true, effort: 4 })
+      .toBuffer({ resolveWithObject: true });
+    const src = await saveImage(`${key}-${width}`, data);
+    variants.push({
+      src,
+      width: info.width,
+      height: info.height,
+      bytes: data.length,
+    });
+  }
+  const fallback =
+    variants.find((variant) => variant.width >= 1536) || variants.at(-1);
+  images[key] = {
+    src: fallback.src,
+    width: metadata.width,
+    height: metadata.height,
+    variants,
+  };
 }
 // A real Paper hero composition is used as the social image.
-await sharp(path.join(sourceAssets, "social-preview.png"))
+const socialImage = await sharp(path.join(sourceAssets, "social-preview.png"))
   .resize(1200, 630, { fit: "contain", background: "#FAFAFC" })
-  .webp({ quality: 90 })
-  .toFile(path.join(out, "assets/social-preview.webp"));
+  .webp({ lossless: true, effort: 4 })
+  .toBuffer();
+const socialImageUrl = await saveImage("social-preview", socialImage);
 await copyFile(
   path.join(root, "assets/favicon.svg"),
   path.join(out, "favicon.svg"),
@@ -59,7 +104,7 @@ const pages = [
     title: "Jacob Gil | Product Lead & Engineer",
     description:
       "Thoughtful software, from mobile products and practical tools to live broadcast graphics. Selected work by Jacob Gil.",
-    content: home(),
+    content: home(images),
     page: "home",
   },
   {
@@ -76,7 +121,7 @@ const pages = [
     file: `work/${project.slug}/index.html`,
     title: `${project.title} | Jacob Gil`,
     description: project.summary,
-    content: caseStudy(project),
+    content: caseStudy(project, images),
     page: "project",
   })),
   {
@@ -101,7 +146,7 @@ const pages = [
 for (const page of pages) {
   const destination = path.join(out, page.file);
   await mkdir(path.dirname(destination), { recursive: true });
-  await writeFile(destination, shell({ ...page, ...manifest }));
+  await writeFile(destination, shell({ ...page, ...manifest, socialImageUrl }));
 }
 const urls = pages
   .filter((page) => !page.noindex)
@@ -118,7 +163,7 @@ const revision = process.env.GITHUB_SHA || "local";
 await writeFile(
   path.join(out, "build.json"),
   JSON.stringify(
-    { revision, projectCount: projects.length, assets: manifest },
+    { revision, projectCount: projects.length, assets: manifest, images },
     null,
     2,
   ),

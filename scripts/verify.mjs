@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { projects } from "../src/projects.mjs";
+import sharp from "sharp";
 
 const root = fileURLToPath(new URL("../dist/", import.meta.url));
 async function files(directory) {
@@ -23,7 +24,14 @@ for (const file of htmlFiles) {
   assert.equal((html.match(/<h1(?:\s|>)/g) || []).length, 1, `One h1: ${file}`);
   assert(html.includes('name="viewport"'), `Viewport: ${file}`);
   assert(html.includes('id="main"'), `Main landmark: ${file}`);
-  for (const [, url] of html.matchAll(/(?:href|src|srcset)="([^"\s]+)"/g)) {
+  const destinations = [
+    ...html.matchAll(/\b(href|src|srcset)="([^"]+)"/g),
+  ].flatMap(([, attribute, value]) =>
+    attribute === "srcset"
+      ? value.split(",").map((candidate) => candidate.trim().split(/\s+/)[0])
+      : [value],
+  );
+  for (const url of destinations) {
     if (!url.startsWith("/")) continue;
     const parsed = new URL(url, "https://example.test");
     const target = path.join(
@@ -49,6 +57,10 @@ for (const file of htmlFiles) {
       /\bwidth="\d+"/.test(tag) && /\bheight="\d+"/.test(tag),
       `Reserved image dimensions: ${file}`,
     );
+    assert(
+      /\bsrcset="[^"]+"/.test(tag) && /\bsizes="[^"]+"/.test(tag),
+      `Responsive image sources: ${file}`,
+    );
   }
   assert(
     !/file:\/\/|app\.paper\.design\/file-assets|localhost|127\.0\.0\.1/.test(
@@ -56,6 +68,38 @@ for (const file of htmlFiles) {
     ),
     `No local/editor URLs: ${file}`,
   );
+}
+// A single small export must never be stretched across Retina screens again.
+const imageManifest = JSON.parse(
+  await readFile(path.join(root, "build.json"), "utf8"),
+).images;
+for (const [key, image] of Object.entries(imageManifest)) {
+  const requiredWidth = key.startsWith("hero-")
+    ? 3 * 424
+    : key.endsWith("-mobile")
+      ? 3 * 727
+      : 3 * 1312;
+  assert(
+    image.variants.at(-1).width >= requiredWidth,
+    `3x image coverage: ${key}`,
+  );
+  for (const variant of image.variants) {
+    const metadata = await sharp(path.join(root, variant.src)).metadata();
+    assert.equal(
+      metadata.width,
+      variant.width,
+      `Truthful srcset width: ${variant.src}`,
+    );
+    assert.equal(
+      metadata.height,
+      variant.height,
+      `Image aspect ratio: ${variant.src}`,
+    );
+    assert(
+      /-\d+-[a-f0-9]{10}\.webp$/.test(variant.src),
+      `Cache-safe image URL: ${variant.src}`,
+    );
+  }
 }
 const home = await readFile(path.join(root, "index.html"), "utf8");
 const headings = [...home.matchAll(/<h3>([^<]+)<\/h3>/g)].map(
@@ -96,5 +140,5 @@ assert(
   "No per-frame scroll handlers",
 );
 console.log(
-  `Verified ${htmlFiles.length} pages, all internal destinations, image dimensions, project order, and motion safeguards.`,
+  `Verified ${htmlFiles.length} pages, all internal destinations and srcset candidates, 3x image coverage, project order, and motion safeguards.`,
 );
