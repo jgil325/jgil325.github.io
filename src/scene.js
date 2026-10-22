@@ -106,14 +106,14 @@ void main() {
 
   // Wind: a slow wave sways the grass from side to side, a little stronger
   // in passing gusts and toward the bottom, where the blades are nearest.
-  float gust = 0.55 + 0.45 * noise(vec2(uv.x * 2.5 - uTime * 0.18, uv.y * 3.0));
-  float sway = sin(uv.x * 22.0 + uv.y * 9.0 - uTime * 1.2) * gust * grass * uWind * uMotion;
-  // Clouds billow gently and drift slowly back and forth.
-  vec2 billow = vec2(noise(uv * 4.0 + uTime * 0.06), noise(uv * 4.0 + 17.0 - uTime * 0.05)) - 0.5;
-  vec2 shift = vec2(sway * 0.008 * smoothstep(0.35, 1.0, uv.y), 0.0)
-    + (billow * 0.018 + vec2(0.02 * sin(uTime * 0.05), 0.0)) * sky * uMotion;
+  float gust = 0.5 + 0.5 * noise(vec2(uv.x * 2.5 - uTime * 0.22, uv.y * 3.0));
+  float sway = sin(uv.x * 22.0 + uv.y * 9.0 - uTime * 1.4) * gust * grass * uWind * uMotion;
+  // Clouds billow and drift slowly back and forth.
+  vec2 billow = vec2(noise(uv * 4.0 + uTime * 0.09), noise(uv * 4.0 + 17.0 - uTime * 0.075)) - 0.5;
+  vec2 shift = vec2(sway * 0.013 * smoothstep(0.35, 1.0, uv.y), 0.0)
+    + (billow * 0.03 + vec2(0.035 * sin(uTime * 0.06), 0.0)) * sky * uMotion;
 
-  vec3 c = textureLod(uImage, uv + shift, uLod).rgb + max(sway, 0.0) * 0.04;
+  vec3 c = textureLod(uImage, uv + shift, uLod).rgb + max(sway, 0.0) * 0.05;
   if (uNight > 0.5) c = pow(clamp(c * vec3(0.55, 0.66, 0.98), 0.0, 1.0), vec3(1.15));
   float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
   vec3 col = clamp((vec3(lum) + (c - lum) * uSat) * uExposure, 0.0, 1.0);
