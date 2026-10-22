@@ -173,8 +173,11 @@ void main() {
         antialias: false,
         // Keeps the frame available for the theme switch's snapshot.
         preserveDrawingBuffer: true,
+        // Software-rendered WebGL would draw every frame on the CPU and
+        // block the page; such devices get the still Canvas 2D frame.
+        failIfMajorPerformanceCaveat: true,
       });
-      if (!gl) throw new Error("WebGL2 unavailable");
+      if (!gl) throw new Error("Hardware-accelerated WebGL2 unavailable");
       const compile = (type, source) => {
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
