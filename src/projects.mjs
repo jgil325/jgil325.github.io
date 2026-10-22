@@ -57,7 +57,7 @@ export const projects = [
   },
   {
     slug: "taiwanese-study",
-    title: "Taiwanese Study",
+    title: "Taiwanese Poker Solver + Tool",
     year: 2026,
     category: "games",
     description: "A desktop workspace for better poker decisions.",
@@ -71,7 +71,7 @@ export const projects = [
     imageWidth: 516,
     imageHeight: 450,
     mobileHeight: 300,
-    alt: "Taiwanese Study desktop workspace with hand arrangements, analysis, and practice controls.",
+    alt: "Taiwanese Poker Solver + Tool desktop workspace with hand arrangements, analysis, and practice controls.",
     sections: [
       [
         "Study the decision.",
