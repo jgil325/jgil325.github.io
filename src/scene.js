@@ -379,8 +379,10 @@ void main() {
       // Some browsers hand out software WebGL without the caveat.
       const info = gl.getExtension("WEBGL_debug_renderer_info");
       const name = `${gl.getParameter(gl.RENDERER)} ${info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : ""}`;
-      if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name))
+      if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name)) {
+        gl.getExtension("WEBGL_lose_context")?.loseContext();
         throw new Error("WebGL2 is software-rendered");
+      }
       const compile = (type, source) => {
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -494,7 +496,9 @@ void main() {
     }
   }
 
-  // Without WebGL2: the first scene's dots as one still frame, in Canvas 2D.
+  // Without hardware WebGL2: the first scene's dots as one still frame. The
+  // dots are painted straight into an ImageData buffer, which is far cheaper
+  // than drawing thousands of shapes on a slow device.
   class CanvasRenderer {
     constructor(canvas) {
       this.canvas = canvas;
@@ -508,8 +512,9 @@ void main() {
 
     draw(s) {
       const { canvas, ctx, sample } = this;
-      const { image, frame } = s.a;
+      const { image, frame, effects: fx } = s.a;
       const look = s.look;
+      const contrast = fx.fx[10];
       const cols = Math.ceil(canvas.width / s.cell);
       const rows = Math.ceil(canvas.height / s.cell);
       sample.width = cols;
@@ -538,8 +543,18 @@ void main() {
       );
       sctx.restore();
       const pixels = sctx.getImageData(0, 0, cols, rows).data;
-      ctx.fillStyle = `rgb(${look.ground})`;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const width = canvas.width;
+      const height = canvas.height;
+      const out = ctx.createImageData(width, height);
+      const data = out.data;
+      const [gr, gg, gb] = look.ground;
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = gr;
+        data[i + 1] = gg;
+        data[i + 2] = gb;
+        data[i + 3] = 255;
+      }
+      const cell = s.cell;
       for (let y = 0; y < rows; y++) {
         const v = (y + 0.5) / rows;
         const keep =
@@ -548,37 +563,62 @@ void main() {
         for (let x = 0; x < cols; x++) {
           if (keep <= bayer8(x, y)) continue;
           const i = (y * cols + x) * 4;
-          let rgb = [pixels[i], pixels[i + 1], pixels[i + 2]].map(
-            (value) => value / 255,
-          );
-          if (look.night)
-            rgb = [0.55, 0.66, 0.98].map(
-              (k, j) => Math.min(1, rgb[j] * k) ** 1.15,
-            );
-          const lum = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+          let r = pixels[i] / 255;
+          let g = pixels[i + 1] / 255;
+          let b = pixels[i + 2] / 255;
+          r = 0.62 + (r - 0.62) * contrast;
+          g = 0.62 + (g - 0.62) * contrast;
+          b = 0.62 + (b - 0.62) * contrast;
+          if (look.night) {
+            r = Math.min(1, r * 0.55) ** 1.15;
+            g = Math.min(1, g * 0.66) ** 1.15;
+            b = Math.min(1, b * 0.98) ** 1.15;
+          }
+          const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
           const size =
             look.min +
             (look.max - look.min) *
               Math.max(0, look.night ? lum : 1 - lum) ** look.gamma;
-          const color = rgb.map((value) =>
-            Math.round(
-              Math.min(
-                1,
-                Math.max(0, (lum + (value - lum) * look.sat) * look.exposure),
-              ) * 255,
-            ),
-          );
-          const half = (size * s.cell) / 2;
-          const cx = (x + 0.5) * s.cell;
-          const cy = (y + 0.5) * s.cell;
-          ctx.fillStyle = `rgb(${color})`;
-          if (look.round) {
-            ctx.beginPath();
-            ctx.arc(cx, cy, half * 1.12, 0, Math.PI * 2);
-            ctx.fill();
-          } else ctx.fillRect(cx - half, cy - half, half * 2, half * 2);
+          const tone = (value) =>
+            Math.min(
+              255,
+              Math.max(
+                0,
+                (lum + (value - lum) * look.sat) * look.exposure * 255,
+              ),
+            );
+          const cr = tone(r);
+          const cg = tone(g);
+          const cb = tone(b);
+          // Anti-aliased dot: each pixel takes its share of the dot's area.
+          const half = (size * cell) / 2;
+          const x0 = x * cell;
+          const y0 = y * cell;
+          for (let py = 0; py < cell && y0 + py < height; py++) {
+            const dy = py + 0.5 - cell / 2;
+            for (let px = 0; px < cell && x0 + px < width; px++) {
+              const dx = px + 0.5 - cell / 2;
+              let cover;
+              if (look.round) {
+                cover = Math.min(
+                  1,
+                  Math.max(0, half * 1.12 - Math.hypot(dx, dy) + 0.5),
+                );
+              } else {
+                const ox = Math.min(1, Math.max(0, half + 0.5 - Math.abs(dx)));
+                const oy = Math.min(1, Math.max(0, half + 0.5 - Math.abs(dy)));
+                cover = ox * oy;
+              }
+              if (cover <= 0) continue;
+              const o = ((y0 + py) * width + x0 + px) * 4;
+              data[o] = gr + (cr - gr) * cover;
+              data[o + 1] = gg + (cg - gg) * cover;
+              data[o + 2] = gb + (cb - gb) * cover;
+            }
+          }
         }
       }
+      ctx.putImageData(out, 0, 0);
     }
   }
 
@@ -641,11 +681,15 @@ void main() {
   }
 
   const players = stages.map((stage) => {
-    const canvas = stage.querySelector("canvas");
+    let canvas = stage.querySelector("canvas");
     let renderer;
     try {
       renderer = new WebGLRenderer(canvas);
     } catch {
+      // A canvas that has handed out a WebGL context cannot switch to 2D.
+      const fresh = canvas.cloneNode(false);
+      canvas.replaceWith(fresh);
+      canvas = fresh;
       renderer = new CanvasRenderer(canvas);
     }
     const playlist = JSON.parse(stage.dataset.scenes).filter(
@@ -702,8 +746,28 @@ void main() {
     };
   }
 
+  // The Canvas 2D still frame is drawn once the stage is visible and the
+  // page is idle, so it never competes with loading.
+  const whenIdle = (callback) =>
+    window.requestIdleCallback
+      ? requestIdleCallback(callback, { timeout: 1500 })
+      : setTimeout(callback, 200);
+
   function draw(player, now = performance.now()) {
     if (!player.current || !player.canvas.width) return;
+    if (player.renderer instanceof CanvasRenderer && !player.drawingStill) {
+      player.stale = true;
+      if (!player.visible || player.stillQueued) return;
+      player.stillQueued = true;
+      whenIdle(() => {
+        player.stillQueued = false;
+        player.stale = false;
+        player.drawingStill = true;
+        draw(player);
+        player.drawingStill = false;
+      });
+      return;
+    }
     const moving = motion() && player.animated;
     let reveal = 1;
     // Infinity marks a reveal that waits for the stage to come into view.
@@ -783,6 +847,7 @@ void main() {
       const player = players.find((item) => item.stage === entry.target);
       player.visible = entry.isIntersecting;
       maybeReveal(player);
+      if (player.visible && player.stale) draw(player);
     }
   });
   const sizes = new ResizeObserver((entries) => {
