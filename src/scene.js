@@ -178,6 +178,11 @@ void main() {
         failIfMajorPerformanceCaveat: true,
       });
       if (!gl) throw new Error("Hardware-accelerated WebGL2 unavailable");
+      // Some browsers hand out software WebGL without the caveat.
+      const info = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = `${gl.getParameter(gl.RENDERER)} ${info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : ""}`;
+      if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name))
+        throw new Error("WebGL2 is software-rendered");
       const compile = (type, source) => {
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -506,17 +511,39 @@ void main() {
       .catch(() => {});
   }
 
+  // If the device cannot keep frames coming while a scene animates, the
+  // scenes settle on a still frame rather than slow the page down.
+  const SLOW_FRAME_MS = 45;
+  let frameAverage = 1000 / 60;
+  let frameSamples = 0;
+  let previous = 0;
   let last = 0;
   function tick(now) {
     requestAnimationFrame(tick);
+    const interval = now - previous;
+    previous = now;
     if (document.hidden || !motion()) return;
-    const revealing = scenes.some(
+    const active = scenes.filter(
+      (scene) => scene.visible && scene.animated && scene.image,
+    );
+    if (active.length && interval < 1000) {
+      frameAverage += (interval - frameAverage) * 0.1;
+      frameSamples += 1;
+      if (frameSamples > 30 && frameAverage > SLOW_FRAME_MS) {
+        for (const scene of scenes) {
+          scene.animated = false;
+          scene.revealFrom = null;
+          draw(scene, now);
+        }
+        return;
+      }
+    }
+    const revealing = active.some(
       (scene) => scene.revealFrom !== null && scene.revealFrom <= now,
     );
     if (!revealing && now - last < 1000 / FPS) return;
     last = now;
-    for (const scene of scenes)
-      if (scene.visible && scene.animated) draw(scene, now);
+    for (const scene of active) draw(scene, now);
   }
   requestAnimationFrame(tick);
 
