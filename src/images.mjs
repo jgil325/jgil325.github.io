@@ -2,9 +2,6 @@
 export const containerImageSizes =
   "(max-width: 767px) calc(100vw - 40px), (max-width: 1199px) calc(100vw - 64px), (max-width: 1440px) calc(100vw - 128px), 1312px";
 
-export const heroImageSizes =
-  "(max-width: 459px) calc(100vw - 40px), (max-width: 767px) 420px, (max-width: 1199px) 330px, 424px";
-
 export function projectImageSizes(project, caseStudy) {
   if (caseStudy || project.slug === "broadcast-graphics") {
     return containerImageSizes;

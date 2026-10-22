@@ -25,7 +25,7 @@ for (const file of htmlFiles) {
   assert(html.includes('name="viewport"'), `Viewport: ${file}`);
   assert(html.includes('id="main"'), `Main landmark: ${file}`);
   const destinations = [
-    ...html.matchAll(/\b(href|src|srcset)="([^"]+)"/g),
+    ...html.matchAll(/\b(href|src|srcset|data-src)="([^"]+)"/g),
   ].flatMap(([, attribute, value]) =>
     attribute === "srcset"
       ? value.split(",").map((candidate) => candidate.trim().split(/\s+/)[0])
@@ -74,11 +74,7 @@ const imageManifest = JSON.parse(
   await readFile(path.join(root, "build.json"), "utf8"),
 ).images;
 for (const [key, image] of Object.entries(imageManifest)) {
-  const requiredWidth = key.startsWith("hero-")
-    ? 3 * 424
-    : key.endsWith("-mobile")
-      ? 3 * 727
-      : 3 * 1312;
+  const requiredWidth = key.endsWith("-mobile") ? 3 * 727 : 3 * 1312;
   assert(
     image.variants.at(-1).width >= requiredWidth,
     `3x image coverage: ${key}`,
@@ -138,6 +134,22 @@ const client = await readFile(
 assert(
   !/addEventListener\(['"]scroll['"]/.test(client),
   "No per-frame scroll handlers",
+);
+const scene = await readFile(
+  all.find((file) => /scene-[a-f0-9]{10}\.js$/.test(file)),
+  "utf8",
+);
+assert(scene.includes("prefers-reduced-motion"), "Scene honors reduced motion");
+assert(scene.includes("IntersectionObserver"), "Scene pauses offscreen");
+assert(scene.includes("document.hidden"), "Scene pauses in background tabs");
+assert(
+  !/addEventListener\(['"]scroll['"]/.test(scene),
+  "No per-frame scroll handlers in the scene",
+);
+assert.equal(
+  (home.match(/class="scene-stage"/g) || []).length,
+  2,
+  "Hero and contact scenes",
 );
 console.log(
   `Verified ${htmlFiles.length} pages, all internal destinations and srcset candidates, 3x image coverage, project order, and motion safeguards.`,

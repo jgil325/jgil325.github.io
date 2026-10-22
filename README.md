@@ -29,14 +29,15 @@ The validation checks every static page, internal links and anchors, image descr
 - Edit `src/templates.mjs` for page structure and shared content.
 - Edit `src/styles.css` for the responsive design and motion tokens.
 - Edit `src/client.js` for the theme switch and project library interactions.
-- Replace approved visual compositions in `assets/source/` with high resolution Paper exports: at least 4096 px wide for project desktop/case images, 2304 px for mobile, and 1536 px for hero artwork. Do not enlarge the old 1× PNGs. The build creates responsive lossless WebP sizes with content hashes in their URLs.
+- Edit `src/scene.js` for the dot-field scenes behind the home hero and the contact band. Each scene's framing (mirroring, portrait crop, edge dissolve, skyline, wind) is set on its stage in `src/templates.mjs`. Replace the source pictures in `assets/scenes/`; the build resizes them to 1280 px WebP.
+- Replace approved visual compositions in `assets/source/` with high resolution Paper exports: at least 4096 px wide for project desktop/case images and 2304 px for mobile. Do not enlarge the old 1× PNGs. The build creates responsive lossless WebP sizes with content hashes in their URLs.
 - `src/images.mjs` keeps browser image selection aligned with the desktop, tablet, mobile, and case-study layouts. Image validation checks every `srcset` candidate and enough resolution for 3× displays.
 
 The site has no runtime framework, tracking scripts, API keys, or backend. Each project has a real static URL that can be opened directly. The page content works without JavaScript; search, filters, theme preferences, and motion are progressive enhancements.
 
 ## Motion
 
-The first-visit hero uses a 400 ms entrance with a 50 ms stagger. Project reveals run once per visit at 300 ms. Fine-pointer hover feedback is 200 ms, press feedback is 160 ms, and filter results use a 150 ms crossfade. Keyboard actions are immediate, and reduced motion removes transforms and smooth scrolling.
+The first-visit hero uses a 400 ms entrance with a 50 ms stagger, while its scene dissolves in dot by dot over 1.1 s. The contact scene dissolves in the first time it scrolls into view. After that, wind moves through the grass and light drifts through the clouds at 30 fps; scenes pause offscreen and in background tabs. The theme switch grows the new theme out of the toggle as a 620 ms circle. Project reveals run once per visit at 300 ms. Fine-pointer hover feedback is 200 ms, press feedback is 160 ms, and filter results use a 150 ms crossfade. Keyboard actions are immediate, and reduced motion removes transforms, smooth scrolling, and scene animation (each scene draws one still frame).
 
 ## Credits and image provenance
 
@@ -46,6 +47,8 @@ The first-visit hero uses a 400 ms entrance with a 50 ms stagger. Project reveal
 - Weekly Slopmeter is adapted from [JeanMeijer/slopmeter](https://github.com/JeanMeijer/slopmeter), licensed MIT. The preview uses illustrative sample usage data.
 - OiStir / AI Audio Interface and Vanilla Chat are credited as team projects.
 - Professional broadcast work is credited to RF Labs / RF Cloud. Private source code is not included in this repository.
+- The home scenes are Mushoku Tensei anime screenshots: [Roxy & Rudeus, hillside](https://wallhaven.cc/w/gpeoyl) and [snowy mountain crossing](https://wallhaven.cc/w/jxvl8p). The artwork belongs to its creators and rights holders; replace it with original art before relying on it commercially.
+- Geist and Geist Mono are by Vercel and basement.studio, licensed under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`). The build serves Latin subsets.
 
 ## Publish
 

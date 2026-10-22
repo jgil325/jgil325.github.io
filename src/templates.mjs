@@ -1,9 +1,5 @@
 import { profile, projects } from "./projects.mjs";
-import {
-  imageAttributes,
-  heroImageSizes,
-  projectImageSizes,
-} from "./images.mjs";
+import { imageAttributes, projectImageSizes } from "./images.mjs";
 
 export const escape = (value) =>
   String(value).replace(
@@ -37,11 +33,22 @@ export function navigation() {
   <header class="site-header container" id="top">
     <a class="wordmark" href="/" aria-label="Jacob Gil, home">jacob gil.</a>
     <nav aria-label="Main navigation">
-      <a href="/#work">Work</a><a href="/#about">About</a>
-      ${external(profile.github, 'GitHub <span aria-hidden="true">↗</span>', "nav-github")}
-      <button class="theme-toggle" type="button" aria-label="Switch to dark theme" aria-pressed="false" title="Switch color theme"><span aria-hidden="true">◐</span></button>
+      <a href="/#work">Work</a><a href="/#about">About</a><a class="nav-secondary" href="/work/">Library</a><a class="nav-secondary" href="/resume/">Resume</a>
     </nav>
+    <div class="nav-end">
+      ${external(profile.github, 'GitHub <span aria-hidden="true">↗</span>', "pill nav-github")}
+      <button class="theme-toggle" type="button" aria-label="Switch to dark theme" aria-pressed="false" title="Switch color theme"><span aria-hidden="true">◐</span></button>
+    </div>
   </header>`;
+}
+
+// A decorative scene drawn as a dot grid by src/scene.js. Without WebGL or
+// JavaScript the stage stays a plain field of the page color.
+function sceneStage(scenes, key, options) {
+  const data = Object.entries(options)
+    .map(([name, value]) => `data-${name}="${escape(value)}"`)
+    .join(" ");
+  return `<div class="scene-stage" data-src="${scenes[key]}" ${data} aria-hidden="true"><canvas></canvas></div>`;
 }
 
 export function footer() {
@@ -58,6 +65,9 @@ export function shell({
   content,
   css,
   js,
+  scene,
+  font,
+  fontMono,
   socialImageUrl,
   page = "project",
   noindex = false,
@@ -76,7 +86,10 @@ export function shell({
   <meta property="og:image:alt" content="Jacob Gil’s portfolio: Good ideas. Real products.">
   <meta name="twitter:card" content="summary_large_image">
   <script>try{const t=localStorage.getItem('portfolio-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;document.documentElement.dataset.arrive=sessionStorage.getItem('portfolio-arrived')?'false':'true';sessionStorage.setItem('portfolio-arrived','1')}catch{}</script>
+  <link rel="preload" href="/assets/${font}" as="font" type="font/woff2" crossorigin>
+  <style>@font-face{font-family:"Geist";src:url("/assets/${font}") format("woff2");font-weight:100 900;font-display:swap}@font-face{font-family:"Geist Mono";src:url("/assets/${fontMono}") format("woff2");font-weight:100 900;font-display:swap}</style>
   <link rel="stylesheet" href="/assets/${css}"><script src="/assets/${js}" defer></script>
+  ${page === "home" ? `<script src="/assets/${scene}" defer></script>` : ""}
 </head>
 <body data-page="${page}">
   ${navigation()}<main id="main">${content}</main>${footer()}
@@ -97,20 +110,39 @@ function workCard(project, { tool = false, broadcast = false, images } = {}) {
   </article>`;
 }
 
-export function home(images) {
+const builtWith = [
+  "React Native",
+  "TypeScript",
+  "Rust",
+  "Tauri",
+  "Supabase",
+  "Next.js",
+];
+
+export function home(images, scenes) {
   const [ofc, taiwanese, broadcast, recorder, tracker, audio, slopmeter] =
     projects;
-  return `<section class="hero container" aria-labelledby="hero-title">
-    <div class="hero-copy">
-      <p class="hero-role hero-arrival">PRODUCT LEAD &amp; ENGINEER</p>
+  const firstYear = Math.min(...projects.map((project) => project.year));
+  // The hillside is mirrored so the figures sit beside the buttons. On a
+  // portrait screen the crop moves in on them, below the stacked buttons.
+  return `<section class="home-hero" aria-labelledby="hero-title">
+    ${sceneStage(scenes, "hillside", {
+      flip: "true",
+      "crop-portrait": "0.46 0 0.9 0.8",
+      fade: "0 0.17",
+      skyline: "0.42",
+      wind: "1",
+    })}
+    <div class="home-hero-copy container">
+      <p class="eyebrow hero-arrival"><span class="eyebrow-tag">Now</span> Product Lead at RF Labs</p>
       <h1 id="hero-title" class="hero-arrival"><span>Good ideas.</span><span>Real products.</span></h1>
-      <p class="hero-intro hero-arrival"><span class="desktop-intro">I’m Jacob. I build thoughtful software, from mobile products for live events to the graphics that bring the action on air.</span><span class="mobile-intro">I’m Jacob. I build thoughtful software, from live event apps to broadcast graphics.</span></p>
-      <div class="hero-actions hero-arrival"><a class="button button-primary" href="#work">Explore my work <span aria-hidden="true">↓</span></a><p>Product Lead at RF Labs</p></div>
+      <p class="hero-intro hero-arrival"><span class="desktop-intro">I build thoughtful software, from mobile products for live events to the graphics that bring the action on air.</span><span class="mobile-intro">I build thoughtful software, from live event apps to broadcast graphics.</span></p>
+      <div class="hero-actions hero-arrival"><a class="button button-primary" href="#work">Explore my work <span aria-hidden="true">↓</span></a><a class="button button-outline" href="mailto:${profile.email}">Say hello <span aria-hidden="true">↗</span></a></div>
     </div>
-    <picture class="hero-art hero-arrival"><source media="(max-width:767px)" ${imageAttributes("hero-mobile", images, heroImageSizes, { source: true })} width="350" height="334"><img ${imageAttributes("hero-desktop", images, heroImageSizes)} width="424" height="400" alt="OFC Mobile’s play library and multiplayer poker table." fetchpriority="high" decoding="async"></picture>
   </section>
+  <div class="built-with container"><p>Built with</p><ul>${builtWith.map((name) => `<li>${escape(name)}</li>`).join("")}</ul></div>
   <section class="selected-work container" id="work" aria-labelledby="work-title">
-    <div class="section-header"><h2 id="work-title">Selected work</h2><a class="subtle-link" href="/work/">Explore the project library <span aria-hidden="true">↗</span></a></div>
+    <div class="section-header"><div class="section-title"><p class="section-pill">${firstYear} – now · ${projects.length} projects</p><h2 id="work-title">Selected work</h2></div><a class="subtle-link" href="/work/">Explore the project library <span aria-hidden="true">↗</span></a></div>
     <div class="work-row row-lead">${workCard(ofc, { images })}${workCard(taiwanese, { images })}</div>
     ${workCard(broadcast, { broadcast: true, images })}
     <div class="work-row row-secondary">${workCard(recorder, { images })}${workCard(tracker, { images })}</div>
@@ -128,9 +160,19 @@ export function home(images) {
       <div class="about-links">${external(profile.linkedin, "LinkedIn ↗")}<a href="/resume/">Resume <span aria-hidden="true">↗</span></a></div>
     </div>
   </section>
-  <section class="contact container" aria-labelledby="contact-title" data-reveal>
-    <a class="contact-heading" href="mailto:${profile.email}"><h2 id="contact-title">Have something in mind?</h2><span class="contact-arrow" aria-hidden="true">↗</span></a>
-    <a class="text-link email-link" href="mailto:${profile.email}">${profile.email}</a>
+  <section class="contact-band" aria-labelledby="contact-title">
+    ${sceneStage(scenes, "snowy-crossing", {
+      focus: "0.5 0.75",
+      "crop-portrait": "0.55 0.25 1 1",
+      fade: "0.3 0.3",
+      skyline: "0.2",
+      wind: "0",
+    })}
+    <div class="contact-copy container" data-reveal>
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> Get in touch</p>
+      <h2 id="contact-title"><span>Have something</span><span>in mind?</span></h2>
+      <div class="hero-actions"><a class="button button-primary" href="mailto:${profile.email}">${profile.email} <span aria-hidden="true">↗</span></a>${external(profile.linkedin, 'LinkedIn <span aria-hidden="true">↗</span>', "button button-outline")}</div>
+    </div>
   </section>`;
 }
 

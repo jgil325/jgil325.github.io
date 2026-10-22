@@ -38,13 +38,35 @@
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute("content", dark ? "#15171B" : "#FAFAFC");
   }
-  themeButton?.addEventListener("click", () => {
+  function toggleTheme() {
     const dark = themeButton.getAttribute("aria-pressed") === "true";
     root.dataset.theme = dark ? "light" : "dark";
     try {
       localStorage.setItem("portfolio-theme", root.dataset.theme);
     } catch {}
     syncTheme();
+    // The home scene redraws inside the same frame so the reveal captures it.
+    document.dispatchEvent(new Event("portfolio:themechange"));
+  }
+  themeButton?.addEventListener("click", () => {
+    if (!document.startViewTransition || reduceMotion.matches || keyboard) {
+      toggleTheme();
+      return;
+    }
+    // The new theme grows out of the toggle as a circle.
+    const box = themeButton.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    root.style.setProperty("--reveal-x", `${x}px`);
+    root.style.setProperty("--reveal-y", `${y}px`);
+    root.style.setProperty(
+      "--reveal-r",
+      `${Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y))}px`,
+    );
+    root.classList.add("theme-transition");
+    document
+      .startViewTransition(toggleTheme)
+      .finished.finally(() => root.classList.remove("theme-transition"));
   });
   systemDark.addEventListener("change", syncTheme);
   syncTheme();

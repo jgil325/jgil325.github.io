@@ -26,14 +26,35 @@ const out = path.join(root, "dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(path.join(out, "assets"), { recursive: true });
 const manifest = {};
-for (const [type, source] of [
-  ["css", "src/styles.css"],
-  ["js", "src/client.js"],
+for (const [key, source, prefix] of [
+  ["css", "src/styles.css", "site"],
+  ["js", "src/client.js", "site"],
+  ["scene", "src/scene.js", "scene"],
+  ["font", "assets/fonts/geist-latin.woff2", "geist-latin"],
+  ["fontMono", "assets/fonts/geist-mono-latin.woff2", "geist-mono-latin"],
 ]) {
   const content = await readFile(path.join(root, source));
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 10);
-  manifest[type] = `site-${hash}.${type}`;
-  await writeFile(path.join(out, "assets", manifest[type]), content);
+  manifest[key] = `${prefix}-${hash}${path.extname(source)}`;
+  await writeFile(path.join(out, "assets", manifest[key]), content);
+}
+await copyFile(
+  path.join(root, "assets/fonts/OFL.txt"),
+  path.join(out, "assets/geist-OFL.txt"),
+);
+// Scene art is drawn as a dot grid in the browser, so a modest source is plenty:
+// each dot averages several pixels even on a wide, high-density screen.
+const scenes = {};
+for (const filename of await readdir(path.join(root, "assets/scenes"))) {
+  if (!filename.endsWith(".jpg")) continue;
+  const key = filename.replace(/\.jpg$/, "");
+  const data = await sharp(path.join(root, "assets/scenes", filename))
+    .resize({ width: 1280, withoutEnlargement: true })
+    .webp({ quality: 82, effort: 5 })
+    .toBuffer();
+  const hash = createHash("sha256").update(data).digest("hex").slice(0, 10);
+  scenes[key] = `/assets/scene-${key}-1280-${hash}.webp`;
+  await writeFile(path.join(out, scenes[key]), data);
 }
 const sourceAssets = path.join(root, "assets/source");
 const images = {};
@@ -51,11 +72,7 @@ for (const filename of await readdir(sourceAssets)) {
   const key = filename.replace(/\.png$/, "");
   const source = path.join(sourceAssets, filename);
   const metadata = await sharp(source).metadata();
-  const minimumWidth = key.startsWith("hero-")
-    ? 1536
-    : key.endsWith("-mobile")
-      ? 2304
-      : 4096;
+  const minimumWidth = key.endsWith("-mobile") ? 2304 : 4096;
   assert(
     metadata.width >= minimumWidth,
     `${filename}: re-export from Paper at ${minimumWidth}px or wider; do not upscale a 1x export.`,
@@ -104,7 +121,7 @@ const pages = [
     title: "Jacob Gil | Product Lead & Engineer",
     description:
       "Thoughtful software, from mobile products and practical tools to live broadcast graphics. Selected work by Jacob Gil.",
-    content: home(images),
+    content: home(images, scenes),
     page: "home",
   },
   {
@@ -163,7 +180,13 @@ const revision = process.env.GITHUB_SHA || "local";
 await writeFile(
   path.join(out, "build.json"),
   JSON.stringify(
-    { revision, projectCount: projects.length, assets: manifest, images },
+    {
+      revision,
+      projectCount: projects.length,
+      assets: manifest,
+      images,
+      scenes,
+    },
     null,
     2,
   ),
