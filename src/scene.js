@@ -14,7 +14,8 @@
 // hero only on the first visit of a session), frames run at 30 fps, stages
 // pause offscreen and in background tabs, and only the current and next
 // pictures are loaded. Reduced motion gets one still frame and no rotation.
-// Without hardware WebGL the first scene is drawn in CSS, at no cost.
+// Without hardware WebGL the first scene is drawn in CSS, at no cost; the
+// hardware check runs in a worker, off the main thread.
 (() => {
   const root = document.documentElement;
   const stages = [...document.querySelectorAll(".scene-stage")];
@@ -568,230 +569,287 @@ void main() {
     canvas.style.maskImage = mask;
   }
 
-  const players = stages
-    .map((stage) => {
-      const canvas = stage.querySelector("canvas");
-      const playlist = JSON.parse(stage.dataset.scenes).filter(
-        (entry) => SCENES[entry.key],
+  // Whether the device has hardware-accelerated WebGL2. Creating a context
+  // where WebGL is emulated in software can block for a long time, so the
+  // check runs on an offscreen canvas in a worker where the browser allows
+  // it. The answer is true, false, or null when the worker could not tell.
+  const PROBE = `
+    const gl = new OffscreenCanvas(1, 1).getContext("webgl2", {
+      failIfMajorPerformanceCaveat: true,
+    });
+    let hardware = Boolean(gl);
+    if (gl) {
+      const info = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = gl.getParameter(gl.RENDERER) + " " +
+        (info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : "");
+      hardware = !/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+    postMessage(hardware);`;
+  function probeHardware() {
+    return new Promise((resolve) => {
+      if (!window.Worker || !window.OffscreenCanvas) return resolve(null);
+      let worker;
+      const url = URL.createObjectURL(
+        new Blob([PROBE], { type: "text/javascript" }),
       );
-      let renderer;
-      try {
-        renderer = new WebGLRenderer(canvas);
-      } catch {
-        // A canvas that handed out a rejected context keeps its blank frame,
-        // so the still scene gets a fresh one.
-        const fresh = canvas.cloneNode(false);
-        canvas.replaceWith(fresh);
-        stillScene(stage, fresh, playlist);
-        return null;
-      }
-      return {
-        stage,
-        canvas,
-        renderer,
-        animated: true,
-        playlist,
-        index: 0,
-        anchor: numbers(stage.dataset.anchor) || [0.5, 0.5],
-        anchorPortrait: numbers(stage.dataset.anchorPortrait),
-        fade: numbers(stage.dataset.fade) || [0, 0],
-        images: new Map(), // key -> decoded image
-        current: null, // { key, image, idleFrom }
-        next: null, // { key, image, rippleFrom }
-        dwell: 0,
-        visible: false,
-        revealFrom: null,
-        // The hero only dissolves in on the first visit of a session.
-        mayReveal:
-          stage.closest(".home-hero") === null ||
-          root.dataset.arrive === "true",
+      const done = (answer) => {
+        worker?.terminate();
+        URL.revokeObjectURL(url);
+        resolve(typeof answer === "boolean" ? answer : null);
       };
-    })
-    .filter(Boolean);
-  if (!players.length) return;
-
-  const motion = () => !reduceMotion.matches;
-
-  function load(player, entry) {
-    if (player.images.has(entry.key)) return player.images.get(entry.key);
-    const image = new Image();
-    image.decoding = "async";
-    image.src = entry.src;
-    const ready = image.decode().then(() => image);
-    player.images.set(entry.key, ready);
-    // A failed load is forgotten, so the next attempt fetches it again.
-    ready.catch(() => player.images.delete(entry.key));
-    return ready;
-  }
-
-  function slot(player, entry, now, moving) {
-    const config = SCENES[entry.key];
-    const idle = entry.idleFrom
-      ? smooth(0, 1, (now - entry.idleFrom) / IDLE_IN_MS)
-      : entry.rippleFrom !== undefined
-        ? 0
-        : 1;
-    return {
-      image: entry.image,
-      frame: framing(player, config, entry.image, now / 1000, moving),
-      effects: effects(config),
-      idle,
-    };
-  }
-
-  function draw(player, now = performance.now()) {
-    if (!player.current || !player.canvas.width) return;
-    const moving = motion() && player.animated;
-    let reveal = 1;
-    // Infinity marks a reveal that waits for the stage to come into view.
-    if (player.revealFrom !== null)
-      reveal = Math.min(1, Math.max(0, (now - player.revealFrom) / REVEAL_MS));
-    if (reveal >= 1) player.revealFrom = null;
-    const ripple = player.next
-      ? Math.min(1, (now - player.next.rippleFrom) / RIPPLE_MS)
-      : 0;
-    player.renderer.draw({
-      look: LOOKS[isDark() ? "dark" : "light"],
-      cell: player.cell,
-      a: slot(player, player.current, now, moving),
-      b: player.next ? slot(player, player.next, now, moving) : null,
-      ripple: player.next ? smooth(0, 1, ripple) : 0,
-      fade: player.fade,
-      reveal: 1 - (1 - reveal) ** 3,
-      time: now / 1000,
-      motion: moving,
+      try {
+        worker = new Worker(url);
+      } catch {
+        return done(null);
+      }
+      worker.onmessage = (event) => done(event.data);
+      worker.onerror = () => done(null);
+      setTimeout(() => done(null), 4000);
     });
   }
 
-  function resize(player) {
-    const rect = player.stage.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    player.canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    player.canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    player.cell = Math.max(2, Math.round(CELL * dpr));
-    draw(player);
-  }
-
-  function maybeReveal(player) {
-    if (!player.current || !player.visible || !player.mayReveal) return;
-    player.mayReveal = false;
-    if (motion() && player.animated) player.revealFrom = performance.now();
-    draw(player);
-  }
-
-  // Advances a stage's rotation: count visible time on the current scene,
-  // preload the next one, run the ripple, then hand over.
-  function advance(player, now, elapsed) {
-    if (player.playlist.length < 2 || player.revealFrom !== null) return;
-    if (player.next) {
-      if (now - player.next.rippleFrom < RIPPLE_MS) return;
-      player.current = { ...player.next, idleFrom: now };
-      player.next = null;
-      player.dwell = 0;
-      player.renderer.release([player.current.image]);
+  function start(hardware) {
+    if (hardware === false) {
+      for (const stage of stages)
+        stillScene(
+          stage,
+          stage.querySelector("canvas"),
+          JSON.parse(stage.dataset.scenes).filter((entry) => SCENES[entry.key]),
+        );
       return;
     }
-    player.dwell += elapsed;
-    const upcoming =
-      player.playlist[(player.index + 1) % player.playlist.length];
-    // Start fetching the next picture a few seconds ahead.
-    if (player.dwell > DWELL_MS - 5000) load(player, upcoming);
-    if (player.dwell < DWELL_MS || player.pending) return;
-    player.pending = true;
-    load(player, upcoming)
-      .then((image) => {
-        player.pending = false;
-        player.renderer.upload(image);
-        player.index = (player.index + 1) % player.playlist.length;
-        player.next = {
-          key: upcoming.key,
-          image,
-          rippleFrom: performance.now(),
+    const players = stages
+      .map((stage) => {
+        const canvas = stage.querySelector("canvas");
+        const playlist = JSON.parse(stage.dataset.scenes).filter(
+          (entry) => SCENES[entry.key],
+        );
+        let renderer;
+        try {
+          renderer = new WebGLRenderer(canvas);
+        } catch {
+          // A canvas that handed out a rejected context keeps its blank frame,
+          // so the still scene gets a fresh one.
+          const fresh = canvas.cloneNode(false);
+          canvas.replaceWith(fresh);
+          stillScene(stage, fresh, playlist);
+          return null;
+        }
+        return {
+          stage,
+          canvas,
+          renderer,
+          animated: true,
+          playlist,
+          index: 0,
+          anchor: numbers(stage.dataset.anchor) || [0.5, 0.5],
+          anchorPortrait: numbers(stage.dataset.anchorPortrait),
+          fade: numbers(stage.dataset.fade) || [0, 0],
+          images: new Map(), // key -> decoded image
+          current: null, // { key, image, idleFrom }
+          next: null, // { key, image, rippleFrom }
+          dwell: 0,
+          visible: false,
+          revealFrom: null,
+          // The hero only dissolves in on the first visit of a session.
+          mayReveal:
+            stage.closest(".home-hero") === null ||
+            root.dataset.arrive === "true",
         };
       })
-      .catch(() => {
-        player.pending = false;
-        player.dwell = 0;
+      .filter(Boolean);
+    if (!players.length) return;
+
+    const motion = () => !reduceMotion.matches;
+
+    function load(player, entry) {
+      if (player.images.has(entry.key)) return player.images.get(entry.key);
+      const image = new Image();
+      image.decoding = "async";
+      image.src = entry.src;
+      const ready = image.decode().then(() => image);
+      player.images.set(entry.key, ready);
+      // A failed load is forgotten, so the next attempt fetches it again.
+      ready.catch(() => player.images.delete(entry.key));
+      return ready;
+    }
+
+    function slot(player, entry, now, moving) {
+      const config = SCENES[entry.key];
+      const idle = entry.idleFrom
+        ? smooth(0, 1, (now - entry.idleFrom) / IDLE_IN_MS)
+        : entry.rippleFrom !== undefined
+          ? 0
+          : 1;
+      return {
+        image: entry.image,
+        frame: framing(player, config, entry.image, now / 1000, moving),
+        effects: effects(config),
+        idle,
+      };
+    }
+
+    function draw(player, now = performance.now()) {
+      if (!player.current || !player.canvas.width) return;
+      const moving = motion() && player.animated;
+      let reveal = 1;
+      // Infinity marks a reveal that waits for the stage to come into view.
+      if (player.revealFrom !== null)
+        reveal = Math.min(
+          1,
+          Math.max(0, (now - player.revealFrom) / REVEAL_MS),
+        );
+      if (reveal >= 1) player.revealFrom = null;
+      const ripple = player.next
+        ? Math.min(1, (now - player.next.rippleFrom) / RIPPLE_MS)
+        : 0;
+      player.renderer.draw({
+        look: LOOKS[isDark() ? "dark" : "light"],
+        cell: player.cell,
+        a: slot(player, player.current, now, moving),
+        b: player.next ? slot(player, player.next, now, moving) : null,
+        ripple: player.next ? smooth(0, 1, ripple) : 0,
+        fade: player.fade,
+        reveal: 1 - (1 - reveal) ** 3,
+        time: now / 1000,
+        motion: moving,
       });
-  }
-
-  const visibility = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      const player = players.find((item) => item.stage === entry.target);
-      player.visible = entry.isIntersecting;
-      maybeReveal(player);
     }
-  });
-  const sizes = new ResizeObserver((entries) => {
-    for (const entry of entries)
-      resize(players.find((item) => item.stage === entry.target));
-  });
 
-  for (const player of players) {
-    resize(player);
-    visibility.observe(player.stage);
-    sizes.observe(player.stage);
-    const first = player.playlist[0];
-    load(player, first)
-      .then((image) => {
-        player.renderer.upload(image);
-        player.current = { key: first.key, image };
-        // Until it is seen, a revealing stage stays an empty field.
-        if (player.mayReveal && motion() && player.animated)
-          player.revealFrom = Infinity;
-        maybeReveal(player);
-        draw(player);
-      })
-      .catch(() => {});
-  }
-
-  // If the device cannot keep frames coming while a scene animates, the
-  // scenes settle on a still frame rather than slow the page down.
-  const SLOW_FRAME_MS = 45;
-  let frameAverage = 1000 / 60;
-  let frameSamples = 0;
-  let previous = 0;
-  let last = 0;
-  function tick(now) {
-    requestAnimationFrame(tick);
-    const interval = now - previous;
-    previous = now;
-    if (document.hidden || !motion()) {
-      last = now;
-      return;
+    function resize(player) {
+      const rect = player.stage.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      player.canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      player.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      player.cell = Math.max(2, Math.round(CELL * dpr));
+      draw(player);
     }
-    const active = players.filter(
-      (player) => player.visible && player.animated && player.current,
-    );
-    if (active.length && interval < 1000) {
-      frameAverage += (interval - frameAverage) * 0.1;
-      frameSamples += 1;
-      if (frameSamples > 30 && frameAverage > SLOW_FRAME_MS) {
-        for (const player of players) {
-          player.animated = false;
-          player.revealFrom = null;
-          player.next = null;
-          draw(player, now);
-        }
+
+    function maybeReveal(player) {
+      if (!player.current || !player.visible || !player.mayReveal) return;
+      player.mayReveal = false;
+      if (motion() && player.animated) player.revealFrom = performance.now();
+      draw(player);
+    }
+
+    // Advances a stage's rotation: count visible time on the current scene,
+    // preload the next one, run the ripple, then hand over.
+    function advance(player, now, elapsed) {
+      if (player.playlist.length < 2 || player.revealFrom !== null) return;
+      if (player.next) {
+        if (now - player.next.rippleFrom < RIPPLE_MS) return;
+        player.current = { ...player.next, idleFrom: now };
+        player.next = null;
+        player.dwell = 0;
+        player.renderer.release([player.current.image]);
         return;
       }
+      player.dwell += elapsed;
+      const upcoming =
+        player.playlist[(player.index + 1) % player.playlist.length];
+      // Start fetching the next picture a few seconds ahead.
+      if (player.dwell > DWELL_MS - 5000) load(player, upcoming);
+      if (player.dwell < DWELL_MS || player.pending) return;
+      player.pending = true;
+      load(player, upcoming)
+        .then((image) => {
+          player.pending = false;
+          player.renderer.upload(image);
+          player.index = (player.index + 1) % player.playlist.length;
+          player.next = {
+            key: upcoming.key,
+            image,
+            rippleFrom: performance.now(),
+          };
+        })
+        .catch(() => {
+          player.pending = false;
+          player.dwell = 0;
+        });
     }
-    const busy = active.some(
-      (player) =>
-        (player.revealFrom !== null && player.revealFrom <= now) || player.next,
-    );
-    if (!busy && now - last < 1000 / FPS) return;
-    const elapsed = Math.min(now - last, 250);
-    last = now;
-    for (const player of active) {
-      advance(player, now, elapsed);
-      draw(player, now);
-    }
-  }
-  requestAnimationFrame(tick);
 
-  const redraw = () => players.forEach((player) => draw(player));
-  document.addEventListener("portfolio:themechange", redraw);
-  systemDark.addEventListener("change", redraw);
-  reduceMotion.addEventListener("change", redraw);
+    const visibility = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const player = players.find((item) => item.stage === entry.target);
+        player.visible = entry.isIntersecting;
+        maybeReveal(player);
+      }
+    });
+    const sizes = new ResizeObserver((entries) => {
+      for (const entry of entries)
+        resize(players.find((item) => item.stage === entry.target));
+    });
+
+    for (const player of players) {
+      resize(player);
+      visibility.observe(player.stage);
+      sizes.observe(player.stage);
+      const first = player.playlist[0];
+      load(player, first)
+        .then((image) => {
+          player.renderer.upload(image);
+          player.current = { key: first.key, image };
+          // Until it is seen, a revealing stage stays an empty field.
+          if (player.mayReveal && motion() && player.animated)
+            player.revealFrom = Infinity;
+          maybeReveal(player);
+          draw(player);
+        })
+        .catch(() => {});
+    }
+
+    // If the device cannot keep frames coming while a scene animates, the
+    // scenes settle on a still frame rather than slow the page down.
+    const SLOW_FRAME_MS = 45;
+    let frameAverage = 1000 / 60;
+    let frameSamples = 0;
+    let previous = 0;
+    let last = 0;
+    function tick(now) {
+      requestAnimationFrame(tick);
+      const interval = now - previous;
+      previous = now;
+      if (document.hidden || !motion()) {
+        last = now;
+        return;
+      }
+      const active = players.filter(
+        (player) => player.visible && player.animated && player.current,
+      );
+      if (active.length && interval < 1000) {
+        frameAverage += (interval - frameAverage) * 0.1;
+        frameSamples += 1;
+        if (frameSamples > 30 && frameAverage > SLOW_FRAME_MS) {
+          for (const player of players) {
+            player.animated = false;
+            player.revealFrom = null;
+            player.next = null;
+            draw(player, now);
+          }
+          return;
+        }
+      }
+      const busy = active.some(
+        (player) =>
+          (player.revealFrom !== null && player.revealFrom <= now) ||
+          player.next,
+      );
+      if (!busy && now - last < 1000 / FPS) return;
+      const elapsed = Math.min(now - last, 250);
+      last = now;
+      for (const player of active) {
+        advance(player, now, elapsed);
+        draw(player, now);
+      }
+    }
+    requestAnimationFrame(tick);
+
+    const redraw = () => players.forEach((player) => draw(player));
+    document.addEventListener("portfolio:themechange", redraw);
+    systemDark.addEventListener("change", redraw);
+    reduceMotion.addEventListener("change", redraw);
+  }
+
+  probeHardware().then(start);
 })();
