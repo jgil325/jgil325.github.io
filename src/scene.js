@@ -496,14 +496,18 @@ void main() {
     }
   }
 
-  // Without hardware WebGL2: the first scene's dots as one still frame. The
-  // dots are painted straight into an ImageData buffer, which is far cheaper
-  // than drawing thousands of shapes on a slow device.
+  // Without hardware WebGL2: the first scene's dots as one still frame,
+  // cheap enough for slow devices. Each dot's color is computed once, on a
+  // grid with one pixel per dot; the grid is scaled up without smoothing and
+  // a repeating dot mask is laid over it. Dots keep one size, so each dot's
+  // color is blended toward the background by the area its halftone dot
+  // would cover, which keeps the picture's light and shade.
   class CanvasRenderer {
     constructor(canvas) {
       this.canvas = canvas;
       this.ctx = canvas.getContext("2d");
       this.sample = document.createElement("canvas");
+      this.mask = document.createElement("canvas");
     }
 
     upload() {}
@@ -542,30 +546,31 @@ void main() {
         rows,
       );
       sctx.restore();
-      const pixels = sctx.getImageData(0, 0, cols, rows).data;
-      const width = canvas.width;
-      const height = canvas.height;
-      const out = ctx.createImageData(width, height);
-      const data = out.data;
+      const grid = sctx.getImageData(0, 0, cols, rows);
+      const data = grid.data;
       const [gr, gg, gb] = look.ground;
-      for (let i = 0; i < data.length; i += 4) {
-        data[i] = gr;
-        data[i + 1] = gg;
-        data[i + 2] = gb;
-        data[i + 3] = 255;
-      }
       const cell = s.cell;
+      // The one dot size the mask uses, and the share of a cell it covers.
+      const dot = look.max;
+      const dotArea = look.round
+        ? Math.min(1, (Math.PI / 4) * (dot * 1.12) ** 2)
+        : dot * dot;
       for (let y = 0; y < rows; y++) {
         const v = (y + 0.5) / rows;
         const keep =
           (s.fade[0] ? smooth(0, s.fade[0], v) : 1) *
           (s.fade[1] ? 1 - smooth(1 - s.fade[1], 1, v) : 1);
         for (let x = 0; x < cols; x++) {
-          if (keep <= bayer8(x, y)) continue;
           const i = (y * cols + x) * 4;
-          let r = pixels[i] / 255;
-          let g = pixels[i + 1] / 255;
-          let b = pixels[i + 2] / 255;
+          if (keep <= bayer8(x, y)) {
+            data[i] = gr;
+            data[i + 1] = gg;
+            data[i + 2] = gb;
+            continue;
+          }
+          let r = data[i] / 255;
+          let g = data[i + 1] / 255;
+          let b = data[i + 2] / 255;
           r = 0.62 + (r - 0.62) * contrast;
           g = 0.62 + (g - 0.62) * contrast;
           b = 0.62 + (b - 0.62) * contrast;
@@ -579,46 +584,45 @@ void main() {
             look.min +
             (look.max - look.min) *
               Math.max(0, look.night ? lum : 1 - lum) ** look.gamma;
-          const tone = (value) =>
-            Math.min(
+          const area = look.round
+            ? (Math.PI / 4) * (size * 1.12) ** 2
+            : size * size;
+          const share = Math.min(1, area / dotArea);
+          const tone = (value, base) => {
+            const c = Math.min(
               255,
               Math.max(
                 0,
                 (lum + (value - lum) * look.sat) * look.exposure * 255,
               ),
             );
-          const cr = tone(r);
-          const cg = tone(g);
-          const cb = tone(b);
-          // Anti-aliased dot: each pixel takes its share of the dot's area.
-          const half = (size * cell) / 2;
-          const x0 = x * cell;
-          const y0 = y * cell;
-          for (let py = 0; py < cell && y0 + py < height; py++) {
-            const dy = py + 0.5 - cell / 2;
-            for (let px = 0; px < cell && x0 + px < width; px++) {
-              const dx = px + 0.5 - cell / 2;
-              let cover;
-              if (look.round) {
-                cover = Math.min(
-                  1,
-                  Math.max(0, half * 1.12 - Math.hypot(dx, dy) + 0.5),
-                );
-              } else {
-                const ox = Math.min(1, Math.max(0, half + 0.5 - Math.abs(dx)));
-                const oy = Math.min(1, Math.max(0, half + 0.5 - Math.abs(dy)));
-                cover = ox * oy;
-              }
-              if (cover <= 0) continue;
-              const o = ((y0 + py) * width + x0 + px) * 4;
-              data[o] = gr + (cr - gr) * cover;
-              data[o + 1] = gg + (cg - gg) * cover;
-              data[o + 2] = gb + (cb - gb) * cover;
-            }
-          }
+            return base + (c - base) * share;
+          };
+          data[i] = tone(r, gr);
+          data[i + 1] = tone(g, gg);
+          data[i + 2] = tone(b, gb);
         }
       }
-      ctx.putImageData(out, 0, 0);
+      sctx.putImageData(grid, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(sample, 0, 0, cols * cell, rows * cell);
+      // A cell-sized tile of background with one dot cut out, repeated.
+      const { mask } = this;
+      mask.width = cell;
+      mask.height = cell;
+      const mctx = mask.getContext("2d");
+      mctx.fillStyle = `rgb(${look.ground})`;
+      mctx.fillRect(0, 0, cell, cell);
+      mctx.globalCompositeOperation = "destination-out";
+      const half = (dot * cell) / 2;
+      if (look.round) {
+        mctx.beginPath();
+        mctx.arc(cell / 2, cell / 2, half * 1.12, 0, Math.PI * 2);
+        mctx.fill();
+      } else
+        mctx.fillRect(cell / 2 - half, cell / 2 - half, half * 2, half * 2);
+      ctx.fillStyle = ctx.createPattern(mask, "repeat");
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
   }
 
@@ -792,12 +796,7 @@ void main() {
 
   function resize(player) {
     const rect = player.stage.getBoundingClientRect();
-    // The Canvas 2D still frame is painted pixel by pixel on slow devices,
-    // so it stays at CSS resolution.
-    const dpr =
-      player.renderer instanceof CanvasRenderer
-        ? 1
-        : Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     player.canvas.width = Math.max(1, Math.round(rect.width * dpr));
     player.canvas.height = Math.max(1, Math.round(rect.height * dpr));
     player.cell = Math.max(2, Math.round(CELL * dpr));
