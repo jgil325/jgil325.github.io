@@ -14,6 +14,7 @@
 // hero only on the first visit of a session), frames run at 30 fps, stages
 // pause offscreen and in background tabs, and only the current and next
 // pictures are loaded. Reduced motion gets one still frame and no rotation.
+// Without hardware WebGL the first scene is drawn in CSS, at no cost.
 (() => {
   const root = document.documentElement;
   const stages = [...document.querySelectorAll(".scene-stage")];
@@ -372,7 +373,7 @@ void main() {
         // Keeps the frame available for the theme switch's snapshot.
         preserveDrawingBuffer: true,
         // Software-rendered WebGL would draw every frame on the CPU and
-        // block the page; such devices get the still Canvas 2D frame.
+        // block the page; such devices get the CSS still scene.
         failIfMajorPerformanceCaveat: true,
       });
       if (!gl) throw new Error("Hardware-accelerated WebGL2 unavailable");
@@ -496,148 +497,9 @@ void main() {
     }
   }
 
-  // Without hardware WebGL2: the first scene's dots as one still frame,
-  // cheap enough for slow devices. Each dot's color is computed once, on a
-  // grid with one pixel per dot; the grid is scaled up without smoothing and
-  // a repeating dot mask is laid over it. Dots keep one size, so each dot's
-  // color is blended toward the background by the area its halftone dot
-  // would cover, which keeps the picture's light and shade.
-  class CanvasRenderer {
-    constructor(canvas) {
-      this.canvas = canvas;
-      this.ctx = canvas.getContext("2d");
-      this.sample = document.createElement("canvas");
-      this.mask = document.createElement("canvas");
-    }
-
-    upload() {}
-
-    release() {}
-
-    draw(s) {
-      const { canvas, ctx, sample } = this;
-      const { image, frame, effects: fx } = s.a;
-      const look = s.look;
-      const contrast = fx.fx[10];
-      const cols = Math.ceil(canvas.width / s.cell);
-      const rows = Math.ceil(canvas.height / s.cell);
-      sample.width = cols;
-      sample.height = rows;
-      const sctx = sample.getContext("2d", { willReadFrequently: true });
-      const { origin, scale } = frame;
-      const iw = image.naturalWidth;
-      const ih = image.naturalHeight;
-      sctx.save();
-      if (scale[0] < 0) {
-        sctx.translate(cols, 0);
-        sctx.scale(-1, 1);
-      }
-      const sx = (scale[0] < 0 ? origin[0] + scale[0] : origin[0]) * iw;
-      sctx.imageSmoothingQuality = "high";
-      sctx.drawImage(
-        image,
-        sx,
-        origin[1] * ih,
-        Math.abs(scale[0]) * iw,
-        scale[1] * ih,
-        0,
-        0,
-        cols,
-        rows,
-      );
-      sctx.restore();
-      const grid = sctx.getImageData(0, 0, cols, rows);
-      const data = grid.data;
-      const [gr, gg, gb] = look.ground;
-      const cell = s.cell;
-      // The one dot size the mask uses, and the share of a cell it covers.
-      const dot = look.max;
-      const dotArea = look.round
-        ? Math.min(1, (Math.PI / 4) * (dot * 1.12) ** 2)
-        : dot * dot;
-      for (let y = 0; y < rows; y++) {
-        const v = (y + 0.5) / rows;
-        const keep =
-          (s.fade[0] ? smooth(0, s.fade[0], v) : 1) *
-          (s.fade[1] ? 1 - smooth(1 - s.fade[1], 1, v) : 1);
-        for (let x = 0; x < cols; x++) {
-          const i = (y * cols + x) * 4;
-          if (keep <= bayer8(x, y)) {
-            data[i] = gr;
-            data[i + 1] = gg;
-            data[i + 2] = gb;
-            continue;
-          }
-          let r = data[i] / 255;
-          let g = data[i + 1] / 255;
-          let b = data[i + 2] / 255;
-          r = 0.62 + (r - 0.62) * contrast;
-          g = 0.62 + (g - 0.62) * contrast;
-          b = 0.62 + (b - 0.62) * contrast;
-          if (look.night) {
-            r = Math.min(1, r * 0.55) ** 1.15;
-            g = Math.min(1, g * 0.66) ** 1.15;
-            b = Math.min(1, b * 0.98) ** 1.15;
-          }
-          const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          const size =
-            look.min +
-            (look.max - look.min) *
-              Math.max(0, look.night ? lum : 1 - lum) ** look.gamma;
-          const area = look.round
-            ? (Math.PI / 4) * (size * 1.12) ** 2
-            : size * size;
-          const share = Math.min(1, area / dotArea);
-          const tone = (value, base) => {
-            const c = Math.min(
-              255,
-              Math.max(
-                0,
-                (lum + (value - lum) * look.sat) * look.exposure * 255,
-              ),
-            );
-            return base + (c - base) * share;
-          };
-          data[i] = tone(r, gr);
-          data[i + 1] = tone(g, gg);
-          data[i + 2] = tone(b, gb);
-        }
-      }
-      sctx.putImageData(grid, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(sample, 0, 0, cols * cell, rows * cell);
-      // A cell-sized tile of background with one dot cut out, repeated.
-      const { mask } = this;
-      mask.width = cell;
-      mask.height = cell;
-      const mctx = mask.getContext("2d");
-      mctx.fillStyle = `rgb(${look.ground})`;
-      mctx.fillRect(0, 0, cell, cell);
-      mctx.globalCompositeOperation = "destination-out";
-      const half = (dot * cell) / 2;
-      if (look.round) {
-        mctx.beginPath();
-        mctx.arc(cell / 2, cell / 2, half * 1.12, 0, Math.PI * 2);
-        mctx.fill();
-      } else
-        mctx.fillRect(cell / 2 - half, cell / 2 - half, half * 2, half * 2);
-      ctx.fillStyle = ctx.createPattern(mask, "repeat");
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-
   function smooth(a, b, x) {
     const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
     return k * k * (3 - 2 * k);
-  }
-  function bayer8(x, y) {
-    let value = 0;
-    for (let bit = 0, size = 1; bit < 3; bit++, size *= 2) {
-      const bx = Math.floor(x / size) % 2;
-      const by = Math.floor(y / size) % 2;
-      value += ((bx * 2 + by * 3) % 4) / (4 * size * size);
-    }
-    return value;
   }
   const numbers = (value) => (value ? value.split(" ").map(Number) : null);
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
@@ -684,42 +546,69 @@ void main() {
     };
   }
 
-  const players = stages.map((stage) => {
-    let canvas = stage.querySelector("canvas");
-    let renderer;
-    try {
-      renderer = new WebGLRenderer(canvas);
-    } catch {
-      // A canvas that has handed out a WebGL context cannot switch to 2D.
-      const fresh = canvas.cloneNode(false);
-      canvas.replaceWith(fresh);
-      canvas = fresh;
-      renderer = new CanvasRenderer(canvas);
-    }
-    const playlist = JSON.parse(stage.dataset.scenes).filter(
-      (entry) => SCENES[entry.key],
+  // Without hardware WebGL2 the first scene is drawn in CSS instead: the
+  // picture under a repeating dot pattern of the page color, mirrored and
+  // placed like the animated scene. The browser paints it off the main
+  // thread, so slow devices pay nothing for it.
+  function stillScene(stage, canvas, playlist) {
+    const first = playlist[0];
+    const config = SCENES[first.key];
+    const [top, bottom] = numbers(stage.dataset.fade) || [0, 0];
+    stage.dataset.still = "";
+    if (config.flip) stage.dataset.flip = "";
+    // The canvas is mirrored as a whole, so position by the unmirrored subject.
+    const x = config.flip ? 1 - config.subject[0] : config.subject[0];
+    canvas.style.setProperty("--scene-image", `url("${first.src}")`);
+    canvas.style.setProperty(
+      "--scene-position",
+      `${x * 100}% ${config.subject[1] * 100}%`,
     );
-    return {
-      stage,
-      canvas,
-      renderer,
-      animated: renderer instanceof WebGLRenderer,
-      playlist,
-      index: 0,
-      anchor: numbers(stage.dataset.anchor) || [0.5, 0.5],
-      anchorPortrait: numbers(stage.dataset.anchorPortrait),
-      fade: numbers(stage.dataset.fade) || [0, 0],
-      images: new Map(), // key -> decoded image
-      current: null, // { key, image, idleFrom }
-      next: null, // { key, image, rippleFrom }
-      dwell: 0,
-      visible: false,
-      revealFrom: null,
-      // The hero only dissolves in on the first visit of a session.
-      mayReveal:
-        stage.closest(".home-hero") === null || root.dataset.arrive === "true",
-    };
-  });
+    const mask = `linear-gradient(transparent, #000 ${top * 100}%, #000 ${(1 - bottom) * 100}%, transparent)`;
+    canvas.style.webkitMaskImage = mask;
+    canvas.style.maskImage = mask;
+  }
+
+  const players = stages
+    .map((stage) => {
+      const canvas = stage.querySelector("canvas");
+      const playlist = JSON.parse(stage.dataset.scenes).filter(
+        (entry) => SCENES[entry.key],
+      );
+      let renderer;
+      try {
+        renderer = new WebGLRenderer(canvas);
+      } catch {
+        // A canvas that handed out a rejected context keeps its blank frame,
+        // so the still scene gets a fresh one.
+        const fresh = canvas.cloneNode(false);
+        canvas.replaceWith(fresh);
+        stillScene(stage, fresh, playlist);
+        return null;
+      }
+      return {
+        stage,
+        canvas,
+        renderer,
+        animated: true,
+        playlist,
+        index: 0,
+        anchor: numbers(stage.dataset.anchor) || [0.5, 0.5],
+        anchorPortrait: numbers(stage.dataset.anchorPortrait),
+        fade: numbers(stage.dataset.fade) || [0, 0],
+        images: new Map(), // key -> decoded image
+        current: null, // { key, image, idleFrom }
+        next: null, // { key, image, rippleFrom }
+        dwell: 0,
+        visible: false,
+        revealFrom: null,
+        // The hero only dissolves in on the first visit of a session.
+        mayReveal:
+          stage.closest(".home-hero") === null ||
+          root.dataset.arrive === "true",
+      };
+    })
+    .filter(Boolean);
+  if (!players.length) return;
 
   const motion = () => !reduceMotion.matches;
 
@@ -750,28 +639,8 @@ void main() {
     };
   }
 
-  // The Canvas 2D still frame is drawn once the stage is visible and the
-  // page is idle, so it never competes with loading.
-  const whenIdle = (callback) =>
-    window.requestIdleCallback
-      ? requestIdleCallback(callback, { timeout: 1500 })
-      : setTimeout(callback, 200);
-
   function draw(player, now = performance.now()) {
     if (!player.current || !player.canvas.width) return;
-    if (player.renderer instanceof CanvasRenderer && !player.drawingStill) {
-      player.stale = true;
-      if (!player.visible || player.stillQueued) return;
-      player.stillQueued = true;
-      whenIdle(() => {
-        player.stillQueued = false;
-        player.stale = false;
-        player.drawingStill = true;
-        draw(player);
-        player.drawingStill = false;
-      });
-      return;
-    }
     const moving = motion() && player.animated;
     let reveal = 1;
     // Infinity marks a reveal that waits for the stage to come into view.
@@ -851,7 +720,6 @@ void main() {
       const player = players.find((item) => item.stage === entry.target);
       player.visible = entry.isIntersecting;
       maybeReveal(player);
-      if (player.visible && player.stale) draw(player);
     }
   });
   const sizes = new ResizeObserver((entries) => {
